@@ -141,3 +141,103 @@ class TestScaffoldNewProject:
         scaffold_new_project(PROJECT_TEMPLATE, p, {"cross_name": "Lantz"})
         with pytest.raises(FileExistsError):
             scaffold_new_project(PROJECT_TEMPLATE, p, {"cross_name": "Lantz"})
+
+
+# ------------------------- code-quality review round 3 (error handling) ----
+#
+# scaffolding.py's suite was almost entirely happy-path: every existing test
+# passes a valid template and schema-conformant overrides. These cover the
+# three failure modes a caller (breeding_core's auto-create path) can
+# actually hit.
+
+
+class TestScaffoldingErrorPaths:
+    def test_override_violating_schema_type_is_not_validated_at_scaffold_time(
+        self, tmp_path
+    ):
+        """Pins CURRENT behaviour, deliberately not a demand for a fix.
+
+        An override whose value can't be represented as the field's declared
+        type is written out unvalidated, producing a file that `read_plant`
+        with the same schema then refuses to parse back. Override validation
+        is documented accepted technical debt (Minor severity: every real
+        caller is `breeding_core`, which passes schema-shaped values), so
+        this test exists to make the behaviour VISIBLE and to fail loudly if
+        it silently changes in either direction."""
+        p = tmp_path / "Ltz09.md"
+        scaffold_new_plant(PLANT_TEMPLATE, p, {"id": "Ltz09", "photos": "not-a-list"})
+        schema = plant_markdown.load_schema(PLANT_TEMPLATE)
+        with pytest.raises(plant_markdown.SchemaTypeError):
+            plant_markdown.read_plant(p, schema=schema)
+
+    def test_project_override_violating_schema_type_is_not_validated(self, tmp_path):
+        """Same accepted-debt pin for scaffold_new_project."""
+        p = tmp_path / "project.md"
+        scaffold_new_project(
+            PROJECT_TEMPLATE, p, {"cross_name": "Lantz", "drive_folders": "nope"}
+        )
+        schema = project_markdown.load_schema(PROJECT_TEMPLATE)
+        with pytest.raises(project_markdown.SchemaTypeError):
+            project_markdown.read_project(p, schema=schema)
+
+    def test_nonexistent_template_path_raises_filenotfound(self, tmp_path):
+        p = tmp_path / "Ltz09.md"
+        with pytest.raises(FileNotFoundError):
+            scaffold_new_plant(tmp_path / "no-such-template.md", p, {"id": "Ltz09"})
+        assert not p.exists(), "no file may be created when the template is unusable"
+
+    def test_project_nonexistent_template_path_raises_filenotfound(self, tmp_path):
+        p = tmp_path / "project.md"
+        with pytest.raises(FileNotFoundError):
+            scaffold_new_project(
+                tmp_path / "no-such-template.md", p, {"cross_name": "Lantz"}
+            )
+        assert not p.exists()
+
+    def test_malformed_template_raises_markdown_error(self, tmp_path):
+        """A template that isn't a valid frontmatter document at all (no
+        delimiters) must surface the module's own error type, not a bare
+        parse crash."""
+        bad_template = tmp_path / "bad-template.md"
+        bad_template.write_text("no frontmatter here\n", encoding="utf-8")
+        p = tmp_path / "Ltz09.md"
+        with pytest.raises(plant_markdown.PlantMarkdownError):
+            scaffold_new_plant(bad_template, p, {"id": "Ltz09"})
+        assert not p.exists()
+
+    def test_template_of_example_values_not_descriptors_rejected(self, tmp_path):
+        """A template accidentally authored as example DATA rather than
+        {type, default, description} descriptors must be rejected, not
+        scaffolded into a file full of garbage."""
+        bad_template = tmp_path / "example-values-template.md"
+        bad_template.write_text("---\nid: Ltz01\nvigor: strong\n---\n", encoding="utf-8")
+        p = tmp_path / "Ltz09.md"
+        with pytest.raises(plant_markdown.MalformedFrontmatterError):
+            scaffold_new_plant(bad_template, p, {"id": "Ltz09"})
+        assert not p.exists()
+
+    def test_non_mapping_overrides_rejected(self, tmp_path):
+        """`overrides` is documented as a Mapping. A list/None must raise
+        rather than silently scaffold a defaults-only file — and crucially
+        must NOT leave a partially-written file behind, since the caller's
+        FileExistsError guard would then refuse to retry that plant forever.
+
+        The exact exception type is not pinned: `dict.update` raises
+        ValueError for a wrong-shaped sequence and TypeError for a
+        non-iterable, and normalising that is on the accepted-debt list."""
+        p = tmp_path / "Ltz09.md"
+        with pytest.raises((TypeError, ValueError)):
+            scaffold_new_plant(PLANT_TEMPLATE, p, ["id", "Ltz09"])
+        assert not p.exists()
+
+    def test_none_overrides_rejected(self, tmp_path):
+        p = tmp_path / "Ltz09.md"
+        with pytest.raises((TypeError, ValueError)):
+            scaffold_new_plant(PLANT_TEMPLATE, p, None)
+        assert not p.exists()
+
+    def test_project_non_mapping_overrides_rejected(self, tmp_path):
+        p = tmp_path / "project.md"
+        with pytest.raises((TypeError, ValueError)):
+            scaffold_new_project(PROJECT_TEMPLATE, p, ["cross_name", "Lantz"])
+        assert not p.exists()
