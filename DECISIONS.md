@@ -268,14 +268,100 @@ applied here rather than re-learned. Likewise `HEAD:refs/heads/<branch>` with
 an explicit detached-HEAD refusal, from the same source: the JSON era
 hardcoded `main`.
 
-### The token no longer goes in a URL
+### The token no longer goes in a URL — and no longer goes in the argv either
 
 `https://$TOKEN@github.com/...` writes the credential into anything that logs
-the argv or the remote. It is now passed as `-c http.extraHeader=Authorization: Basic <b64>`,
-so it never reaches `.git/config` or `git remote -v` — asserted by a test.
+the argv or the remote. The token is now supplied as an `http.extraHeader`, so
+it never reaches `.git/config` or `git remote -v` — asserted by a test.
 `github_repo` is consequently unused for URL construction; it is kept in the
 signature because all six wrappers pass it, and each push targets that repo's
 own `origin`.
+
+**Round-1 correction (Important #3).** The header was originally passed as a
+`-c http.extraHeader=...` *argv* flag, which is a real (if smaller) exposure:
+argv is world-readable through `/proc/<pid>/cmdline` and `ps -ef` for the
+lifetime of the push — this host does not mount `/proc` with `hidepid` — and
+git re-exports `-c` settings to `git-remote-https` via
+`GIT_CONFIG_PARAMETERS`. The credential is now passed through the
+**environment** instead:
+
+```
+GIT_CONFIG_COUNT=1
+GIT_CONFIG_KEY_0=http.extraHeader
+GIT_CONFIG_VALUE_0=Authorization: Basic <b64>
+```
+
+which git honours identically (verified: `git config --get http.extraHeader`
+reads the value back through those variables).
+
+**Residual exposure, stated plainly so the claim is not read as stronger than
+it is.** This is a strictly smaller surface, not zero. `/proc/<pid>/environ` is
+readable by the same uid and by root, and git still propagates the config to
+its `git-remote-https` helper child. What changed is that the secret is no
+longer *world*-readable to every local user via argv. An attacker already
+running as this uid (or as root) can still read it — as they could read the
+1Password-provisioned `GITHUB_TOKEN` in the gateway process's own environment
+anyway, so the env route adds no new capability to that attacker.
+
+`test_token_never_appears_in_any_subprocess_argv` pins this positionally: it
+fails if the raw token, its base64 Basic form, or the string `extraHeader`
+appears in *any* element of *any* argv (the previous test only checked
+`.git/config` and `remote get-url`, and would have passed unchanged had the
+token moved to a different argv position). Confirmed empirically out-of-band
+by scanning `/proc/*/cmdline` during 40 real local pushes: zero hits with the
+env route, and the same scanner reports LEAK against the old `-c` form.
+
+### POLICY: best-effort and never-raising, with a stderr WARN as the operator signal
+
+`push_to_github()` runs inside the Discord message handler. An exception here
+does not just lose a push, it breaks the ingestion reply — so every git call is
+best-effort and the function never raises. That is deliberate and stays.
+
+**Round-1 correction (Important #1): never-raise had become never-tell.** Every
+git failure was swallowed with no return value, no exception and no output, so
+a wedged remote was indistinguishable from a healthy one. Reproduced by the
+reviewer: diverging `origin` and pushing three times produced three stranded
+local commits, zero stderr, zero signal.
+
+The chosen signal is the idiom this module already uses for exactly this class
+of non-fatal error in exactly this path — `update_plant`'s failed-photo-upload
+warning:
+
+```
+print(f"WARN: git {action} failed in {repo}: {result.stderr.strip()}", file=sys.stderr)
+```
+
+It needs no new infrastructure, is inherited by all six wrappers, and is
+captured by `hermes_gateway.py`'s logging. `add`, `commit` and `push` failures
+each warn. The argv is deliberately **not** echoed in the warning — that is the
+one place a credential could re-enter a log line (see Important #3 above).
+
+**Round-1 correction (Important #2): never-raise was not actually absolute.**
+`subprocess.run` can fail *before* the child process exists —
+`FileNotFoundError` when git is not on `PATH`, or any other `OSError` (EACCES
+on an unexecutable git, ENOMEM). The reviewer verified that with an emptied
+`PATH` this propagated straight out of `push_to_github()` into the message
+handler: precisely the crash-the-bot outcome the design exists to prevent.
+`_git()` now catches `OSError` and returns a synthetic
+`returncode=1` result, so exec failures and non-zero exits flow through one
+code path and get the same WARN treatment.
+
+### Failure paths are tested, not just asserted in prose
+
+`tests/test_push_failure_paths.py` pins the two policies above: non-fast-forward
+rejection against a diverged local bare remote (no raise, local commit survives,
+remote unmoved, WARN emitted — and each of three repeated attempts warns), a
+deleted/unreachable `origin`, a stale `.git/index.lock` before the add step,
+an emptied `PATH`, and a monkeypatched `OSError` from `subprocess.run`. All use
+local bare repos, filesystem tricks or a broken binary lookup — no network.
+
+### Minor round-1 fixes folded in
+
+* `_push_repo`'s local `config` was renamed `auth_env`; `config` shadowed the
+  project-config dict this module uses elsewhere.
+* `git diff --cached --quiet` is now tested for `returncode == 1` ("there are
+  staged changes") rather than `!= 0`, so a genuinely broken repo (rc >= 128)
+  is not misread as having something to commit.
 
 ### Test-suite safety
 

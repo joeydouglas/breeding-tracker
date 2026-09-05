@@ -242,12 +242,52 @@ def update_markdown(plant, breeding_dir):
 _DATA_PATHS = ('project.md', 'plants')
 
 
-def _git(args, cwd):
-    """One git command, never raising. Every call site here is best-effort:
-    a push failure must not break the Discord ingestion reply, exactly as in
-    the JSON era."""
-    return subprocess.run(
-        ['git', *args], cwd=str(cwd), capture_output=True, text=True
+class _GitResult:
+    """Stand-in for ``subprocess.CompletedProcess`` when the child process
+    was never created at all (see ``_git``)."""
+
+    __slots__ = ('returncode', 'stdout', 'stderr')
+
+    def __init__(self, returncode, stdout, stderr):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _git(args, cwd, env=None):
+    """One git command, never raising.
+
+    Every call site here is best-effort: this runs inside the Discord message
+    handler, so a git failure must degrade to a logged warning rather than an
+    exception that kills the ingestion reply (and the bot).
+
+    ``subprocess.run`` can fail BEFORE the child exists -- FileNotFoundError
+    for a git binary that is not on PATH, or any other OSError (EACCES from
+    an unexecutable git, ENOMEM under pressure). Those are converted into a
+    synthetic non-zero result so that a single code path -- the caller's
+    ``returncode`` check and its WARN logging -- handles both kinds of
+    failure uniformly.
+    """
+    try:
+        return subprocess.run(
+            ['git', *args], cwd=str(cwd), capture_output=True, text=True,
+            **({'env': env} if env is not None else {}),
+        )
+    except OSError as e:
+        return _GitResult(1, '', f'could not run git: {e}')
+
+
+def _warn(action, repo, result):
+    """Operator-visible signal for a swallowed git failure.
+
+    Same idiom as ``update_plant``'s failed-photo-upload warning: a
+    ``WARN: ...`` line on stderr, inherited by all six wrappers and captured
+    by ``hermes_gateway.py``'s logging. The argv is deliberately NOT echoed
+    -- it is the one place a credential could re-enter a log line.
+    """
+    print(
+        f"WARN: git {action} failed in {repo}: {(result.stderr or '').strip()}",
+        file=sys.stderr,
     )
 
 
@@ -260,14 +300,21 @@ def _push_repo(repo, paths):
     if not (repo / '.git').exists():
         return
 
-    _git(['add', '--all', '--', *paths], repo)
+    added = _git(['add', '--all', '--', *paths], repo)
+    if added.returncode != 0:
+        _warn('add', repo, added)
 
-    if _git(['diff', '--cached', '--quiet'], repo).returncode != 0:
-        _git(
+    # rc 1 means "there are staged changes"; rc >= 128 means git itself is
+    # broken (corrupt index, missing objects) and must NOT be misread as
+    # "something to commit".
+    if _git(['diff', '--cached', '--quiet'], repo).returncode == 1:
+        committed = _git(
             ['commit', '-m',
              f'Auto-update from Discord observation {datetime.now().isoformat()}'],
             repo,
         )
+        if committed.returncode != 0:
+            _warn('commit', repo, committed)
 
     if 'origin' not in _git(['remote'], repo).stdout.split():
         return
@@ -278,13 +325,28 @@ def _push_repo(repo, paths):
 
     # Token resolved via 1Password at gateway startup -- see
     # `hermes secrets onepassword status`.
+    #
+    # The credential is handed to git through GIT_CONFIG_* ENVIRONMENT
+    # variables rather than `-c http.extraHeader=...` argv flags: argv is
+    # world-readable via /proc/<pid>/cmdline and `ps -ef` for the lifetime of
+    # the push, while the environment is readable only by the same uid (or
+    # root). See DECISIONS.md -- smaller surface, not zero.
     token = os.environ.get("GITHUB_TOKEN")
-    config = []
+    auth_env = None
     if token:
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-        config = ['-c', f'http.extraHeader=Authorization: Basic {basic}']
+        auth_env = {
+            **os.environ,
+            'GIT_CONFIG_COUNT': '1',
+            'GIT_CONFIG_KEY_0': 'http.extraHeader',
+            'GIT_CONFIG_VALUE_0': f'Authorization: Basic {basic}',
+        }
 
-    _git([*config, 'push', '-q', 'origin', f'HEAD:refs/heads/{branch}'], repo)
+    pushed = _git(
+        ['push', '-q', 'origin', f'HEAD:refs/heads/{branch}'], repo, env=auth_env
+    )
+    if pushed.returncode != 0:
+        _warn('push', repo, pushed)
 
 
 def push_to_github(breeding_dir, github_repo, disable_push):
@@ -326,9 +388,15 @@ def push_to_github(breeding_dir, github_repo, disable_push):
 
     `github_repo` is retained for signature compatibility (all six wrappers
     pass it) but no longer BUILDS a URL: each push goes to that repo's own
-    `origin`. A `GITHUB_TOKEN` is supplied as an `http.extraHeader` instead of
-    being interpolated into a remote URL, so it never lands in `.git/config`,
-    `git remote -v`, or an error log.
+    `origin`. A `GITHUB_TOKEN` is supplied as an `http.extraHeader` via
+    `GIT_CONFIG_*` environment variables instead of being interpolated into a
+    remote URL or passed as a `-c` argv flag, so it never lands in
+    `.git/config`, `git remote -v`, an error log, or a world-readable
+    `/proc/<pid>/cmdline`. See DECISIONS.md for the residual exposure.
+
+    NEVER RAISES. This runs inside the Discord message handler, so every git
+    failure -- including an `OSError` from the exec itself -- is swallowed and
+    reported as a `WARN: ...` line on stderr rather than propagated.
     """
     if disable_push:
         return
