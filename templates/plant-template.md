@@ -1,85 +1,88 @@
 ---
+# Plant template schema (Revision 1) — each field is {type, default, description}
+# This is a SCHEMA document, not real plant data. A parser must be able to
+# distinguish this file from an actual plants/<ID>.md file (see registry.json
+# convention: schema files live under templates/, plant data under plants/).
 id:
   type: string
   default: null
-  description: "Plant identifier, e.g. HBH01 / Ltz07 / PK03. Always a string, even when it looks numeric."
+  description: "Plant identifier, e.g. Ltz01, PK03. Prefix comes from the owning project's plant-ID prefix regex."
 cross:
   type: string
   default: null
-  description: "Human-readable cross name this plant belongs to."
+  description: "Name of the cross/project this plant belongs to (denormalized copy of the project's cross_name for convenience)."
 status:
   type: string
-  default: "active"
-  description: "Lifecycle status: active, culled, keeper, etc. Set by Discord status-keyword detection."
+  default: null
+  description: "One of: null (undetermined), 'keeper', 'culled', or other project-specific status keywords detected by breeding_core.py's status-detection regex."
 sex:
   type: string
   default: null
-  description: "male / female / unknown."
+  description: "Plant sex once determined: male, female, hermaphrodite, or null if not yet determined."
 germ_date:
   type: string
   default: null
-  description: "ISO-8601 date the seed was germinated."
+  description: "ISO date the seed germinated, or null."
 veg_start:
   type: string
   default: null
-  description: "ISO-8601 date vegetative growth started."
+  description: "ISO date vegetative growth began, or null."
 flower_flip:
   type: string
   default: null
-  description: "ISO-8601 date the light cycle was flipped to flower."
+  description: "ISO date the plant was flipped to flower, or null."
 harvest_date:
   type: string
   default: null
-  description: "ISO-8601 date the plant was harvested."
+  description: "ISO date of harvest, or null."
 vigor:
-  type: integer
+  type: string
   default: null
-  description: "0-10 rating from Discord observation parsing."
+  description: "Free-text vigor assessment (e.g. 'strong', 'weak', 'average')."
 structure:
   type: string
   default: null
-  description: "Free-text structure/morphology notes."
+  description: "Free-text structural notes (height, branching, internode spacing)."
 terpene_notes:
   type: string
   default: null
-  description: "Free-text terpene/aroma notes."
+  description: "Free-text terpene/smell/flavor notes."
 issues:
   type: string
   default: null
-  description: "Free-text pest/deficiency/problem notes."
+  description: "Free-text pest/disease/deficiency notes, or null."
 selection_notes:
   type: string
   default: null
-  description: "Free-text keeper/cull reasoning."
+  description: "Free-text breeder selection reasoning — why keep or cull."
 photos:
-  type: list
+  type: array
   default: []
-  description: "List of {drive_id, drive_url, filename, embed_url} photo reference objects."
+  description: "List of {drive_id, drive_url, filename, embed_url} objects for this plant's photos."
 photo_count:
   type: integer
   default: 0
-  description: "Number of photos attached to this plant."
+  description: "Count of items in photos — kept denormalized for fast dashboard rendering without counting the array."
 photos_drive_url:
   type: string
-  default: null
-  description: "Google Drive folder URL holding this plant's photos."
-original_notes:
-  type: string
-  default: null
-  description: "Verbatim notes imported from the original Google Doc tab, preserved unmodified."
-corrected_reading:
-  type: string
-  default: null
-  description: "Note recording a corrected transcription/OCR reading of an observation, with who confirmed it and when. Found on Lantz Ltz01 during the Task 3.0 field inventory."
+  default: ""
+  description: "Google Drive folder URL containing this plant's photos, if any."
 observation_log:
   type: body
   default: ""
-  description: "Append-only observation log. Stored as the markdown BODY of the file, never in frontmatter, so hand-written formatting survives byte-for-byte."
+  description: "REVISION 2 (adopted from Task 1.1's implementer subagent, approved by Joey 2026-09-05): stored as the markdown BODY of the file, never in frontmatter, to guarantee byte-exact preservation of hand-written formatting (indentation, code fences, tables, trailing whitespace) on every read/write round-trip. Accumulated freeform observation history for this plant."
+original_notes:
+  type: string
+  default: null
+  description: "NEW FIELD found in Task 0.1's field-inventory pass (not in the original plan draft) — verbatim original notes text as first migrated from the source Google Doc, preserved for provenance even after selection_notes/observation_log are edited."
+corrected_reading:
+  type: string
+  default: null
+  description: "NEW FIELD found in Task 0.1's field-inventory pass — records a human-confirmed correction to a transcription/OCR/autocorrect error in original_notes (e.g. 'Thanos' -> 'phenos'), so the correction is never silently lost or re-introduced."
 ---
 
-<!--
-This is the canonical plant template. Each frontmatter key above is a SCHEMA
-DESCRIPTOR object ({type, default, description}) - not example data. A real
-plant file (plants/<ID>.md) carries plain scalar values for these same keys,
-and its markdown body holds the observation_log.
--->
+# Plant markdown body (freeform, optional)
+
+Everything below the YAML frontmatter is optional freeform markdown —
+additional narrative, links, or context that doesn't fit a structured field.
+Parsers must preserve this body verbatim on read/write round-trips.

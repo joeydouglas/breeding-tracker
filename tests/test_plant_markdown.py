@@ -13,6 +13,7 @@ implementation existed. Acceptance criteria mapped from the plan:
 """
 
 import copy
+import os
 from pathlib import Path
 
 import pytest
@@ -47,7 +48,7 @@ def full_plant():
         "veg_start": None,
         "flower_flip": None,
         "harvest_date": None,
-        "vigor": 8,
+        "vigor": "strong",
         "structure": "tall, open, above average stretch",
         "terpene_notes": "ripe peach, gassy backend",
         "issues": None,
@@ -73,9 +74,9 @@ def full_plant():
 
 class TestLoadSchema:
     def test_loads_descriptor_objects_not_example_data(self, schema):
-        assert schema["vigor"]["type"] == "integer"
+        assert schema["vigor"]["type"] == "string"
         assert schema["vigor"]["default"] is None
-        assert "0-10" in schema["vigor"]["description"]
+        assert "vigor" in schema["vigor"]["description"].lower()
 
     def test_id_is_declared_string(self, schema):
         assert schema["id"]["type"] == "string"
@@ -150,7 +151,7 @@ class TestOptionalAndEdgeCases:
         assert got["vigor"] is None
         assert got["photos"] == []
         assert got["photo_count"] == 0
-        assert got["status"] == "active"
+        assert got["status"] is None
         assert got["observation_log"] == ""
 
     def test_zero_photos(self, tmp_path, full_plant, schema):
@@ -186,10 +187,11 @@ class TestOptionalAndEdgeCases:
 
     def test_null_false_zero_empty_defaults_preserved(self, tmp_path, schema):
         p = tmp_path / "n.md"
-        data = {"id": "X1", "vigor": 0, "selection_notes": "", "sex": None}
+        data = {"id": "X1", "photo_count": 0, "vigor": "", "selection_notes": "", "sex": None}
         write_plant(p, data, schema=schema)
         got = read_plant(p, schema=schema)
-        assert got["vigor"] == 0
+        assert got["photo_count"] == 0
+        assert got["vigor"] == ""
         assert got["selection_notes"] == ""
         assert got["sex"] is None
 
@@ -254,9 +256,9 @@ class TestBodyRoundTrip:
     def test_body_is_not_yaml_parsed(self, tmp_path, schema):
         body = "vigor: 9\nstatus: keeper\n"
         p = tmp_path / "y.md"
-        write_plant(p, {"id": "Y1", "vigor": 3, "observation_log": body}, schema=schema)
+        write_plant(p, {"id": "Y1", "vigor": "strong", "observation_log": body}, schema=schema)
         got = read_plant(p, schema=schema)
-        assert got["vigor"] == 3
+        assert got["vigor"] == "strong"
         assert got["observation_log"] == body
 
 
@@ -308,25 +310,31 @@ class TestYamlTypeCoercion:
         p.write_text("---\nid: A1\nsex:\n---\n", encoding="utf-8")
         assert read_plant(p, schema=schema)["sex"] is None
 
-    def test_integer_field_stays_int(self, tmp_path, schema):
+    def test_integer_field_stays_int(self, tmp_path):
+        int_schema = {"id": {"type": "string", "default": None, "description": "id"},
+                      "count": {"type": "integer", "default": None, "description": "a synthetic integer field for coercion testing (real schema has no integer fields)"}}
         p = tmp_path / "i.md"
-        p.write_text("---\nid: A1\nvigor: 8\n---\n", encoding="utf-8")
-        got = read_plant(p, schema=schema)
-        assert got["vigor"] == 8
-        assert isinstance(got["vigor"], int) and not isinstance(got["vigor"], bool)
+        p.write_text("---\nid: A1\ncount: 8\n---\n", encoding="utf-8")
+        got = read_plant(p, schema=int_schema)
+        assert got["count"] == 8
+        assert isinstance(got["count"], int) and not isinstance(got["count"], bool)
 
     def test_integer_field_given_string_digits_is_coerced_to_int(
-        self, tmp_path, schema
+        self, tmp_path
     ):
+        int_schema = {"id": {"type": "string", "default": None, "description": "id"},
+                      "count": {"type": "integer", "default": None, "description": "synthetic"}}
         p = tmp_path / "i2.md"
-        p.write_text('---\nid: A1\nvigor: "8"\n---\n', encoding="utf-8")
-        assert read_plant(p, schema=schema)["vigor"] == 8
+        p.write_text('---\nid: A1\ncount: "8"\n---\n', encoding="utf-8")
+        assert read_plant(p, schema=int_schema)["count"] == 8
 
-    def test_integer_field_given_non_numeric_raises(self, tmp_path, schema):
+    def test_integer_field_given_non_numeric_raises(self, tmp_path):
+        int_schema = {"id": {"type": "string", "default": None, "description": "id"},
+                      "count": {"type": "integer", "default": None, "description": "synthetic"}}
         p = tmp_path / "i3.md"
-        p.write_text("---\nid: A1\nvigor: very good\n---\n", encoding="utf-8")
+        p.write_text("---\nid: A1\ncount: very good\n---\n", encoding="utf-8")
         with pytest.raises(SchemaTypeError):
-            read_plant(p, schema=schema)
+            read_plant(p, schema=int_schema)
 
     def test_list_field_given_scalar_raises(self, tmp_path, schema):
         p = tmp_path / "l.md"
@@ -357,9 +365,9 @@ class TestYamlTypeCoercion:
 
     def test_no_schema_still_reads_without_coercion_errors(self, tmp_path):
         p = tmp_path / "ns.md"
-        p.write_text("---\nid: A1\nvigor: 8\n---\nbody\n", encoding="utf-8")
+        p.write_text("---\nid: A1\nvigor: strong\n---\nbody\n", encoding="utf-8")
         got = read_plant(p)
-        assert got["vigor"] == 8
+        assert got["vigor"] == "strong"
 
 
 # -------------------------------------------------------------- rejects ----
@@ -469,6 +477,191 @@ class TestMalformedInput:
         for exc in (MalformedFrontmatterError, DuplicateKeyError, SchemaTypeError,
                     UnsafeYamlError):
             assert issubclass(exc, PlantMarkdownError)
+
+
+class TestCrlfPreservation:
+    """Review finding: read_plant used text-mode universal-newline translation,
+    silently turning \\r\\n into \\n. A Windows-edited or autocrlf=true-checked-out
+    body must survive byte-for-byte, per criterion (d)."""
+
+    def test_crlf_body_survives_exactly(self, tmp_path, schema):
+        p = tmp_path / "crlf.md"
+        body = "line one\r\nline two\r\n"
+        write_plant(p, {"id": "C1", "observation_log": body}, schema=schema)
+        assert read_plant(p, schema=schema)["observation_log"] == body
+
+    def test_mixed_crlf_and_lf_body_survives_exactly(self, tmp_path, schema):
+        p = tmp_path / "mixed.md"
+        body = "unix line\nwindows line\r\nunix again\n"
+        write_plant(p, {"id": "C2", "observation_log": body}, schema=schema)
+        assert read_plant(p, schema=schema)["observation_log"] == body
+
+    def test_manually_authored_crlf_file_read_verbatim(self, tmp_path, schema):
+        p = tmp_path / "crlf_hand.md"
+        with open(p, "wb") as fh:
+            fh.write(b"---\r\nid: C3\r\n---\r\nnote one\r\nnote two\r\n")
+        assert read_plant(p, schema=schema)["observation_log"] == "note one\r\nnote two\r\n"
+
+
+class TestEmptyFrontmatterRoundTrip:
+    """Review finding: write_plant with zero frontmatter fields emits
+    '---\\n---\\nbody', which _split_frontmatter then rejected as
+    'unterminated frontmatter' -- the writer produced a file its own reader
+    could not read back."""
+
+    def test_write_with_no_fields_round_trips(self, tmp_path, schema):
+        p = tmp_path / "empty.md"
+        write_plant(p, {"observation_log": "just a body\n"}, schema=None)
+        got = read_plant(p, schema=None)
+        assert got["observation_log"] == "just a body\n"
+
+    def test_write_with_no_fields_and_no_body_round_trips(self, tmp_path):
+        p = tmp_path / "empty2.md"
+        write_plant(p, {}, schema=None)
+        assert read_plant(p, schema=None)["observation_log"] == ""
+
+    def test_write_with_no_fields_round_trips_with_schema(self, tmp_path, schema):
+        p = tmp_path / "empty3.md"
+        write_plant(p, {}, schema=schema)
+        got = read_plant(p, schema=schema)
+        assert got["observation_log"] == ""
+        assert got["id"] is None
+
+
+class TestHostileYamlRecursionGuard:
+    """Review finding: PyYAML's own composer can hit Python's recursion limit
+    while building nodes for a deeply-nested flow collection, raising a bare
+    RecursionError *before* our post-parse _check_depth ever runs -- escaping
+    every PlantMarkdownError-catching caller (e.g. the webhook's git-pull
+    handler)."""
+
+    def test_extremely_deep_nesting_raises_plant_markdown_error_not_recursionerror(
+        self, tmp_path, schema
+    ):
+        depth = 2000
+        p = tmp_path / "deep.md"
+        p.write_text(
+            "---\nid: A1\nphotos: " + "[" * depth + "]" * depth + "\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(PlantMarkdownError):
+            read_plant(p, schema=schema)
+
+
+class TestCollectionTagsRejected:
+    """Review finding: !!set / !!omap / !!pairs / !!binary aren't plain
+    scalars/mappings/sequences our schema ever needs, but nothing rejected
+    them: they were constructed by SafeLoader's own machinery and returned
+    _Scalar-wrapped or native (set/bytes) objects that are neither
+    JSON-serializable nor writable back out (yaml.representer.RepresenterError,
+    not a PlantMarkdownError)."""
+
+    def test_yaml_set_tag_rejected(self, tmp_path, schema):
+        p = tmp_path / "set.md"
+        p.write_text(
+            "---\nid: A1\nissues: !!set {a: null, b: null}\n---\n", encoding="utf-8"
+        )
+        with pytest.raises(PlantMarkdownError):
+            read_plant(p, schema=schema)
+
+    def test_yaml_omap_tag_rejected(self, tmp_path, schema):
+        p = tmp_path / "omap.md"
+        p.write_text(
+            "---\nid: A1\nissues: !!omap\n  - a: 1\n---\n", encoding="utf-8"
+        )
+        with pytest.raises(PlantMarkdownError):
+            read_plant(p, schema=schema)
+
+    def test_yaml_pairs_tag_rejected(self, tmp_path, schema):
+        p = tmp_path / "pairs.md"
+        p.write_text(
+            "---\nid: A1\nissues: !!pairs\n  - a: 1\n---\n", encoding="utf-8"
+        )
+        with pytest.raises(PlantMarkdownError):
+            read_plant(p, schema=schema)
+
+    def test_yaml_binary_tag_rejected(self, tmp_path, schema):
+        p = tmp_path / "binary.md"
+        p.write_text(
+            "---\nid: A1\nissues: !!binary |\n  aGVsbG8=\n---\n", encoding="utf-8"
+        )
+        with pytest.raises(PlantMarkdownError):
+            read_plant(p, schema=schema)
+
+
+class TestAnchorsRejectedEvenUnaliased:
+    """Review finding: the module docstring claims 'Anchors are refused
+    outright', but the actual guard only fired on AliasEvent -- a bare,
+    never-referenced anchor (`structure: &a big`) parsed fine, contradicting
+    the documented contract."""
+
+    def test_unaliased_anchor_is_still_rejected(self, tmp_path, schema):
+        p = tmp_path / "anchor_only.md"
+        p.write_text(
+            "---\nid: A1\nstructure: &a big\n---\n", encoding="utf-8"
+        )
+        with pytest.raises(UnsafeYamlError):
+            read_plant(p, schema=schema)
+
+
+class TestCustomScalarTagsRejected:
+    """Review finding: an explicit, non-standard tag on a plain scalar
+    (`!whatever hello`) fell through to the default constructor, which
+    re-resolved the VALUE via the implicit resolver and silently discarded
+    the tag entirely -- contradicting the 'custom tags rejected' claim,
+    even though it happened to be harmless in practice."""
+
+    def test_custom_tag_on_scalar_rejected(self, tmp_path, schema):
+        p = tmp_path / "customtag.md"
+        p.write_text(
+            "---\nid: A1\nissues: !whatever hello\n---\n", encoding="utf-8"
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            read_plant(p, schema=schema)
+
+    def test_python_name_tag_on_scalar_rejected(self, tmp_path, schema):
+        p = tmp_path / "pyname.md"
+        p.write_text(
+            "---\nid: A1\nissues: !!python/name:os.system ''\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(PlantMarkdownError):
+            read_plant(p, schema=schema)
+
+
+class TestWritePermissionsPreserved:
+    """Review finding: tempfile.mkstemp always creates 0600, and os.replace
+    preserves the temp file's mode -- so rewriting an existing 0644 (the
+    normal git-tracked mode) file silently downgraded it to 0600."""
+
+    def test_rewriting_existing_file_preserves_its_mode(self, tmp_path, schema):
+        p = tmp_path / "perm.md"
+        write_plant(p, {"id": "A1"}, schema=schema)
+        os.chmod(p, 0o644)
+        write_plant(p, {"id": "A1", "vigor": 5}, schema=schema)
+        assert (p.stat().st_mode & 0o777) == 0o644
+
+    def test_new_file_gets_permissive_default_mode(self, tmp_path, schema):
+        p = tmp_path / "newperm.md"
+        write_plant(p, {"id": "A1"}, schema=schema)
+        mode = p.stat().st_mode & 0o777
+        assert mode != 0o600, "new plant files must not be created world-unreadable"
+
+
+class TestUnknownSchemaTypeRejected:
+    """Review finding: a typo'd `type: integr` in a template silently
+    disabled coercion for that field with no error at all -- load_schema
+    never validated the type vocabulary."""
+
+    def test_load_schema_rejects_unknown_type(self, tmp_path):
+        bad_template = tmp_path / "bad-template.md"
+        bad_template.write_text(
+            "---\nid:\n  type: string\n  default: null\n  description: x\n"
+            "vigor:\n  type: banana\n  default: null\n  description: y\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            load_schema(bad_template)
 
 
 class TestWriteValidation:

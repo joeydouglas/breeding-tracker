@@ -40,3 +40,59 @@ resolve to a non-string type.
 field list. It was found by round-tripping all 95 real plants across all 6
 projects and has been added to `plant-template.md`. This is the Task 3.0 field
 inventory doing its job early — the plan's asserted field list was incomplete.
+
+## Task 1.1 spec-compliance review findings (2026-09-05)
+
+The spec-compliance reviewer subagent found real, undocumented drift between
+this repo's local `templates/plant-template.md` and the canonical,
+Joey-approved template in `breeding-meta`. All 4 unapproved schema changes
+below were **reverted to canonical** rather than approved as new changes:
+
+- `vigor`: reverted from an unapproved `integer` (0-10 rating, never seen in
+  real data -- vigor is null on all 95 real plants) back to canonical
+  `string` (free-text assessment).
+- `status` default: reverted from an unapproved `"active"` back to canonical
+  `null` (undetermined) -- every plant missing a status is now correctly
+  materialised as undetermined, not silently marked active.
+- `photos_drive_url` default: reverted from an unapproved `null` back to
+  canonical `""`.
+- `photos` type spelling: reverted from an unapproved `list` back to
+  canonical `array` (the coercer now accepts both spellings so this is
+  purely a schema-authoring convention, not a functional risk either way).
+
+Tests that used `vigor` as their example field for exercising integer-type
+coercion were retargeted to a synthetic ad-hoc schema fixture, since `vigor`
+is not actually an integer field in the approved schema.
+
+**5 genuine implementation bugs** were also found (via tests the reviewer
+wrote but did not surface in its structured findings output -- flagged to
+Joey as a process gap in subagent self-reporting) and fixed:
+
+1. CRLF body/frontmatter content was silently translated to LF by
+   `Path.read_text()`'s default universal-newline mode on the READ side (the
+   WRITE side already correctly used `newline=""`). Fixed by reading with
+   `newline=""` too.
+2. `write_plant` with zero frontmatter fields emitted `"---\n---\nbody"`,
+   which `_split_frontmatter` then rejected as "unterminated frontmatter" --
+   the writer produced a file its own reader couldn't read back. Fixed by
+   special-casing the empty-frontmatter delimiter shape.
+3. A deeply-nested YAML flow collection could hit Python's own recursion
+   limit inside PyYAML's composer, raising a bare `RecursionError` *before*
+   the module's own `_check_depth` guard ever ran -- escaping every
+   `PlantMarkdownError`-catching caller (e.g. the webhook's future git-pull
+   handler). Fixed by catching `RecursionError` in `_parse_yaml` and
+   re-raising as `UnsafeYamlError`.
+4. `tempfile.mkstemp` always creates its temp file mode `0600`, and
+   `os.replace` preserves that mode -- so rewriting an existing normally-
+   permissioned file (e.g. `0644`, the usual mode for a git-tracked file)
+   silently downgraded it to `0600` on every single write. Fixed by
+   explicitly `chmod`-ing the temp file to match the target's existing mode
+   before the atomic replace, or a permissive umask-respecting default for
+   brand-new files.
+5. `load_schema` never validated the `type` vocabulary -- a typo'd
+   `type: banana` in a template silently disabled coercion for that field
+   with no error at all. Fixed by validating against a known-types set.
+
+All fixes verified: 102 tests, 100% green, zero warnings
+(`pytest -W error`), independently re-run after each fix rather than
+trusted from any subagent's self-report.

@@ -50,6 +50,7 @@ BODY_FIELD = "observation_log"
 MAX_FILE_BYTES = 1 * 1024 * 1024
 MAX_NESTING_DEPTH = 20
 _SCHEMA_KEYS = frozenset({"type", "default", "description"})
+_KNOWN_SCHEMA_TYPES = frozenset({"string", "integer", "list", "array", "body"})
 
 
 # --------------------------------------------------------------- errors ----
@@ -156,7 +157,34 @@ def _no_anchors(self, node):  # pragma: no cover - exercised via compose
 _StrictLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates
 )
-_StrictLoader.add_constructor(None, _plain_scalar)
+
+
+def _reject_unknown_tag(loader: _StrictLoader, node: yaml.Node) -> Any:
+    """Fallback for any tag not explicitly recognised.
+
+    Plain (untagged) scalars never reach this: PyYAML's implicit resolver
+    always assigns them one of the standard tags registered below before
+    construction runs. Only an EXPLICITLY tagged node (custom local tags like
+    ``!whatever``, or dangerous ones like ``!!python/name:...``) lands here,
+    so unconditional rejection is correct and safe.
+    """
+    raise MalformedFrontmatterError(f"unsupported YAML tag: {node.tag}")
+
+
+def _reject_collection_tag(loader: _StrictLoader, node: yaml.Node) -> Any:
+    """Reject YAML's non-scalar/mapping/sequence collection types.
+
+    ``!!set``, ``!!omap``, ``!!pairs`` and ``!!binary`` are all "safe" as far
+    as PyYAML's SafeLoader is concerned (they never construct arbitrary
+    Python objects), but our schema only ever needs plain scalars, lists and
+    mappings. Letting these through would silently hand back non-JSON-
+    serialisable values (``set``, ``bytes``) that ``write_plant`` can't
+    round-trip either.
+    """
+    raise MalformedFrontmatterError(f"unsupported YAML tag: {node.tag}")
+
+
+_StrictLoader.add_constructor(None, _reject_unknown_tag)
 for _tag in (
     "tag:yaml.org,2002:null",
     "tag:yaml.org,2002:bool",
@@ -166,13 +194,47 @@ for _tag in (
     "tag:yaml.org,2002:str",
 ):
     _StrictLoader.add_constructor(_tag, _plain_scalar)
-_StrictLoader.compose_node = (  # type: ignore[method-assign]
-    lambda self, parent, index: (
+for _tag in (
+    "tag:yaml.org,2002:set",
+    "tag:yaml.org,2002:omap",
+    "tag:yaml.org,2002:pairs",
+    "tag:yaml.org,2002:binary",
+):
+    _StrictLoader.add_constructor(_tag, _reject_collection_tag)
+
+
+def _compose_node_reject_anchors(
+    self: _StrictLoader, parent: yaml.Node, index: Any
+) -> yaml.Node:
+    """Reject any node carrying an anchor, whether or not it's ever aliased.
+
+    The previous implementation only fired on an *alias reference*
+    (``AliasEvent``), so a bare, never-referenced anchor definition like
+    ``structure: &a big`` parsed fine — contradicting the module's own
+    documented "anchors are refused outright" contract. Every composable
+    event (scalar, sequence-start, mapping-start, alias) carries an
+    ``.anchor`` attribute; checking it before composing catches definitions
+    and references alike.
+    """
+    event = self.peek_event()
+    if getattr(event, "anchor", None) is not None:
         _no_anchors(self, None)
-        if self.check_event(yaml.events.AliasEvent)
-        else yaml.composer.Composer.compose_node(self, parent, index)
-    )
-)
+    return yaml.composer.Composer.compose_node(self, parent, index)
+
+
+_StrictLoader.compose_node = _compose_node_reject_anchors  # type: ignore[method-assign]
+
+
+def _get_umask() -> int:
+    """Read the process umask without permanently changing it.
+
+    ``os.umask()`` is the only stdlib way to read the current umask, and it
+    always has the side effect of setting a new one -- so this immediately
+    restores the original value after reading it.
+    """
+    current = os.umask(0)
+    os.umask(current)
+    return current
 
 
 def _check_depth(value: Any, depth: int = 0) -> None:
@@ -194,6 +256,16 @@ def _parse_yaml(text: str) -> dict:
         loaded = yaml.load(text, Loader=_StrictLoader)
     except (DuplicateKeyError, UnsafeYamlError):
         raise
+    except RecursionError as exc:
+        # PyYAML's composer can hit Python's own recursion limit while
+        # building nodes for a deeply-nested flow collection, raising a bare
+        # RecursionError BEFORE our post-parse _check_depth ever runs. That
+        # would otherwise escape every PlantMarkdownError-catching caller
+        # (e.g. the webhook's git-pull handler) as an unrelated exception.
+        raise UnsafeYamlError(
+            f"structure nested deeper than {MAX_NESTING_DEPTH} levels "
+            "(hit Python's recursion limit while parsing)"
+        ) from exc
     except yaml.YAMLError as exc:
         raise MalformedFrontmatterError(f"invalid YAML frontmatter: {exc}") from exc
 
@@ -216,19 +288,40 @@ def _parse_yaml_plain(text: str) -> dict:
 
 
 def _split_frontmatter(text: str) -> tuple[str, str]:
-    """Return ``(yaml_text, body)``; the body is returned verbatim."""
-    if not text.startswith(DELIMITER + "\n"):
+    """Return ``(yaml_text, body)``; the body is returned verbatim.
+
+    The delimiter lines themselves may end in ``\\n`` or ``\\r\\n`` (a file
+    hand-edited on Windows, or checked out with ``core.autocrlf=true``, uses
+    CRLF throughout, including on the ``---`` lines) -- only the BODY's own
+    line endings need to be preserved byte-for-byte, so the delimiter search
+    tolerates either.
+    """
+    if text.startswith(DELIMITER + "\r\n"):
+        rest = text[len(DELIMITER) + 2 :]
+    elif text.startswith(DELIMITER + "\n"):
+        rest = text[len(DELIMITER) + 1 :]
+    else:
         raise MalformedFrontmatterError(
             "file must begin with a '---' frontmatter delimiter on line 1"
         )
-    rest = text[len(DELIMITER) + 1 :]
-    marker = "\n" + DELIMITER + "\n"
-    end = rest.find(marker)
-    if end == -1:
-        if rest.endswith("\n" + DELIMITER):
-            return rest[: -(len(DELIMITER) + 1)], ""
-        raise MalformedFrontmatterError("unterminated frontmatter: no closing '---'")
-    return rest[:end], rest[end + len(marker) :]
+    # Empty frontmatter: write_plant emits "---\n---\nbody" when there are
+    # zero fields, so the closing delimiter sits at position 0 of `rest`
+    # with no preceding blank line -- the general "\n---\n"/"\r\n---\r\n"
+    # marker below requires a newline BEFORE the closing delimiter, which
+    # doesn't exist here. Handle it before falling into that search.
+    for lead in (DELIMITER + "\r\n", DELIMITER + "\n"):
+        if rest.startswith(lead):
+            return "", rest[len(lead) :]
+    if rest == DELIMITER:
+        return "", ""
+    for marker in ("\r\n" + DELIMITER + "\r\n", "\n" + DELIMITER + "\n"):
+        end = rest.find(marker)
+        if end != -1:
+            return rest[:end], rest[end + len(marker) :]
+    for tail in ("\r\n" + DELIMITER, "\n" + DELIMITER):
+        if rest.endswith(tail):
+            return rest[: -len(tail)], ""
+    raise MalformedFrontmatterError("unterminated frontmatter: no closing '---'")
 
 
 # ------------------------------------------------------------- coercion ----
@@ -284,7 +377,7 @@ def _coerce(field: str, value: Any, declared: str) -> Any:
             return int(value)
         raise SchemaTypeError(f"{field}: expected an integer, got {value!r}")
 
-    if declared == "list":
+    if declared in ("list", "array"):
         if isinstance(value, list):
             return value
         raise SchemaTypeError(
@@ -336,7 +429,7 @@ def load_schema(path: str | os.PathLike) -> dict:
     Each returned default is a fresh object, so callers mutating one plant's
     default list can never corrupt another's.
     """
-    text = Path(path).read_text(encoding="utf-8")
+    text = Path(path).read_text(encoding="utf-8", newline="")
     yaml_text, _ = _split_frontmatter(text)
     raw = _parse_yaml_plain(yaml_text)
 
@@ -346,6 +439,11 @@ def load_schema(path: str | os.PathLike) -> dict:
             raise MalformedFrontmatterError(
                 f"{field}: template fields must be {{type, default, description}} "
                 "descriptor objects, not example values"
+            )
+        if spec["type"] not in _KNOWN_SCHEMA_TYPES:
+            raise MalformedFrontmatterError(
+                f"{field}: unknown schema type {spec['type']!r}, expected one "
+                f"of {sorted(_KNOWN_SCHEMA_TYPES)}"
             )
         schema[field] = {
             "type": spec["type"],
@@ -383,7 +481,11 @@ def read_plant(
             f"file is {size} bytes, exceeding the {MAX_FILE_BYTES}-byte limit"
         )
 
-    text = file_path.read_text(encoding="utf-8")
+    # newline="" disables universal-newline translation: a hand-edited or
+    # Windows-checked-out (autocrlf=true) file's CRLF line endings in the
+    # BODY must survive read_plant(write_plant(x)) == x byte-for-byte, not
+    # get silently rewritten to LF.
+    text = file_path.read_text(encoding="utf-8", newline="")
     yaml_text, body = _split_frontmatter(text)
     data = _parse_yaml(yaml_text)
 
@@ -460,8 +562,19 @@ def write_plant(
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    # tempfile.mkstemp always creates its file mode 0600, and os.replace
+    # preserves whatever mode the source (temp) file had -- so rewriting an
+    # existing, normally-permissioned file (e.g. 0644, the usual mode for a
+    # git-tracked file) would silently downgrade it to 0600 on every write.
+    # Match the target's existing mode when rewriting, or fall back to a
+    # permissive default (respecting umask) for a brand-new file.
+    if target.exists():
+        desired_mode = target.stat().st_mode & 0o777
+    else:
+        desired_mode = 0o666 & ~_get_umask()
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
     try:
+        os.chmod(tmp_name, desired_mode)
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(content)
             handle.flush()

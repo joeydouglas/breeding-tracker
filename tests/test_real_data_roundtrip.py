@@ -55,7 +55,8 @@ def test_real_plant_fields_are_all_covered_by_the_template(tracker):
 
 
 @pytest.mark.skipif(not TRACKERS, reason="no real tracker.json files present")
-def test_real_plants_are_byte_stable_across_rewrites(tracker=TRACKERS[0] if TRACKERS else None):
+@pytest.mark.parametrize("tracker", TRACKERS, ids=lambda p: Path(p).parent.name)
+def test_real_plants_are_byte_stable_across_rewrites(tracker):
     """Once a plant is in canonical form (schema defaults materialised),
     further read/write cycles must not churn a single byte - otherwise every
     ingestion run would produce noise commits."""
