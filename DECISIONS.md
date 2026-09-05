@@ -96,3 +96,52 @@ Joey as a process gap in subagent self-reporting) and fixed:
 All fixes verified: 102 tests, 100% green, zero warnings
 (`pytest -W error`), independently re-run after each fix rather than
 trusted from any subagent's self-report.
+
+## Task 1.1 code-quality review findings (2026-09-05)
+
+4 Important issues, all empirically verified by the reviewer, all fixed:
+
+1. A YAML complex/unhashable key (`? [a, b]\n: v`) made `_no_duplicates` do
+   `key in mapping` on an unhashable list, raising a bare `TypeError` that
+   escaped the module's documented "every failure is PlantMarkdownError"
+   contract. Fixed: `TypeError` from the membership check is now caught and
+   re-raised as `MalformedFrontmatterError`.
+2. The `MAX_FILE_BYTES` size guard used `Path.stat()`, which follows
+   symlinks -- a git-committed symlink (e.g. to `/dev/zero`) reports a
+   tiny/zero apparent size while the actual read is unbounded, defeating
+   the DoS guard entirely. Files arrive via `git pull` from human-editable
+   repos and git tracks symlinks, so this was in-scope for the documented
+   threat model. Fixed: read with an explicit `MAX_FILE_BYTES + 1` cap and
+   check the actual bytes read, rather than trusting `stat()`.
+3. The earlier CRLF fix was read-side only -- `write_plant` hardcoded LF
+   frontmatter delimiters even when rewriting a CRLF body, producing a
+   mixed-newline file and a spurious whole-header diff on every touch of a
+   Windows-authored plant. Fixed: the writer now detects a CRLF-only body
+   and matches the delimiters/YAML block to the same line ending.
+4. Block scalars (`|` and `>`) were run through the implicit resolver like
+   any other plain scalar, so `id: >-\n  07` yielded the int `7` -- YAML
+   spec says block scalars are ALWAYS strings, and this violated the
+   module's own "declared types win" rule. Fixed: `_plain_scalar` now
+   short-circuits on `|`/`>` styles the same way it already did for quoted
+   scalars.
+
+Also fixed 2 Minor issues with real correctness implications (not just
+style): `_get_umask()` was toggling the process-global umask on every
+`write_plant` call for a new file, a race against any concurrently-created
+file in another thread/process -- now cached once at import time instead.
+And `read_plant`/`write_plant` were asymmetric for a schema that omits
+`observation_log`: the writer always emitted the body but the reader only
+returned it if the schema declared it, silently breaking
+`read_plant(write_plant(x)) == x`. Fixed: the body is now always returned.
+Also added: an explicit rejection if `observation_log` ever appears in
+frontmatter (previously silently discarded, which could lose hand-entered
+data), since it must live only in the body.
+
+Remaining minor style nits (chmod-before-write ordering, no directory
+fsync after os.replace, `_prepare_for_dump`'s unused `field` param,
+`_check_depth`'s dict-key-counts-as-a-level nesting semantics) are real but
+low severity -- documented here rather than fixed, since none risk data
+loss, crashes, or incorrect behavior on the actual breeding-tracker data.
+
+Final state after both review stages: 111 tests (test_plant_markdown.py +
+test_real_data_roundtrip.py), 100% green, zero warnings.
