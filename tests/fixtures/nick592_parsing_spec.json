@@ -1,0 +1,606 @@
+{
+  "fixture_version": 2,
+  "title": "NICK-592 parsing / status-detection specification",
+  "description": [
+    "Committed, versioned pin of breeding_core.parse_observation() and the",
+    "field-update half of breeding_core.update_plant(). This is the contract",
+    "that the Phase 2 markdown migration must NOT change: Task 2.1 swapped the",
+    "persistence backend (tracker.json -> project.md + plants/<ID>.md) and",
+    "nothing else, so every value below must hold identically before and after.",
+    "",
+    "PROVENANCE: the status vocabulary is documented in breeding_core.py's",
+    "module docstring (NICK-592 consolidation; NICK-589 caught Mule Fuel, Lantz",
+    "and Spaced Paste missing keeper/culled detection entirely). The exhaustive",
+    "case-by-case expectations were DERIVED from the JSON-era source at git",
+    "commit 2dd0537 ('Baseline: monitor-core as of pre-Phase-2'), whose",
+    "parse_observation() and update_plant() field logic are byte-identical to",
+    "today's; tests/test_nick592_parsing_spec.py re-derives them differentially",
+    "against that baseline rather than trusting this file alone.",
+    "",
+    "plant_after is the result of applying update_plant()'s field-merge to a",
+    "fresh make_blank_plant() record (vigor=None, terpene_notes=None,",
+    "status='active'). summary is update_plant()'s returned string, with the",
+    "plant id rendered as {pid}."
+  ],
+  "blank_plant_baseline": {
+    "vigor": null,
+    "terpene_notes": null,
+    "status": "active",
+    "structure": null
+  },
+  "status_vocabulary": {
+    "top_keeper": {
+      "triggers": [
+        "top keeper",
+        "strong keeper",
+        "elite"
+      ],
+      "precedence": 1,
+      "note": "checked first so 'top keeper' is not also matched as bare 'keeper'"
+    },
+    "culled": {
+      "triggers": [
+        "cull",
+        "culled",
+        "toss",
+        "trash"
+      ],
+      "precedence": 2
+    },
+    "keeper": {
+      "triggers": [
+        "keeper",
+        "keep",
+        "select"
+      ],
+      "precedence": 3
+    }
+  },
+  "cases": [
+    {
+      "name": "full_house_top_keeper",
+      "text": "{pid} vigor 9, heavy fuel and citrus, frosty and dense, top keeper",
+      "parse": {
+        "vigor": 9,
+        "terpenes": [
+          "fuel",
+          "citrus"
+        ],
+        "structure": [
+          "frosty",
+          "dense"
+        ],
+        "status": "top_keeper"
+      },
+      "plant_after": {
+        "vigor": "9",
+        "terpene_notes": "fuel, citrus",
+        "status": "top_keeper",
+        "structure": null
+      },
+      "summary": "vigor 9, fuel, citrus terps, frosty, dense",
+      "plant_after_json_era": {
+        "vigor": 9,
+        "terpene_notes": "fuel, citrus",
+        "status": "top_keeper",
+        "structure": null
+      },
+      "vigor_type_deviation": true
+    },
+    {
+      "name": "cull_keyword",
+      "text": "{pid} vigor is 3, weak, cull this one",
+      "parse": {
+        "vigor": 3,
+        "terpenes": [],
+        "structure": null,
+        "status": "culled"
+      },
+      "plant_after": {
+        "vigor": "3",
+        "terpene_notes": null,
+        "status": "culled",
+        "structure": null
+      },
+      "summary": "vigor 3",
+      "plant_after_json_era": {
+        "vigor": 3,
+        "terpene_notes": null,
+        "status": "culled",
+        "structure": null
+      },
+      "vigor_type_deviation": true
+    },
+    {
+      "name": "culled_keyword_past_tense",
+      "text": "{pid} culled today",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "culled"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "culled",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "toss_keyword_is_culled",
+      "text": "{pid} toss it",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "culled"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "culled",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "trash_keyword_is_culled",
+      "text": "{pid} trash",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "culled"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "culled",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "bare_keeper",
+      "text": "{pid} vigor 7 sweet earthy, keeper",
+      "parse": {
+        "vigor": 7,
+        "terpenes": [
+          "sweet",
+          "earthy"
+        ],
+        "structure": null,
+        "status": "keeper"
+      },
+      "plant_after": {
+        "vigor": "7",
+        "terpene_notes": "sweet, earthy",
+        "status": "keeper",
+        "structure": null
+      },
+      "summary": "vigor 7, sweet, earthy terps",
+      "plant_after_json_era": {
+        "vigor": 7,
+        "terpene_notes": "sweet, earthy",
+        "status": "keeper",
+        "structure": null
+      },
+      "vigor_type_deviation": true
+    },
+    {
+      "name": "keep_keyword_is_keeper",
+      "text": "{pid} keep it",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "keeper"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "keeper",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "select_keyword_is_keeper",
+      "text": "{pid} select this one",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "keeper"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "keeper",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "elite_is_top_keeper",
+      "text": "{pid} elite plant",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "top_keeper"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "top_keeper",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "strong_keeper_is_top_keeper_not_keeper",
+      "text": "{pid} strong keeper",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "top_keeper"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "top_keeper",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "top_keeper_beats_bare_keeper_precedence",
+      "text": "{pid} top keeper for sure",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "top_keeper"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "top_keeper",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "cull_beats_keeper_precedence",
+      "text": "{pid} keeper but cull the runt next to it",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "culled"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "culled",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "elite_beats_cull_precedence",
+      "text": "{pid} elite, cull its sibling",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": "top_keeper"
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "top_keeper",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "no_status_keyword_leaves_status_alone",
+      "text": "{pid} nothing notable",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": null
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "summary": "observation logged"
+    },
+    {
+      "name": "vigor_with_is_connector",
+      "text": "{pid} vigor is 8",
+      "parse": {
+        "vigor": 8,
+        "terpenes": [],
+        "structure": null,
+        "status": null
+      },
+      "plant_after": {
+        "vigor": "8",
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "summary": "vigor 8",
+      "plant_after_json_era": {
+        "vigor": 8,
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "vigor_type_deviation": true
+    },
+    {
+      "name": "vigor_without_separator",
+      "text": "{pid} vigor9",
+      "parse": {
+        "vigor": 9,
+        "terpenes": [],
+        "structure": null,
+        "status": null
+      },
+      "plant_after": {
+        "vigor": "9",
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "summary": "vigor 9",
+      "plant_after_json_era": {
+        "vigor": 9,
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "vigor_type_deviation": true
+    },
+    {
+      "name": "vigor_two_digits",
+      "text": "{pid} vigor 10 across the board",
+      "parse": {
+        "vigor": 10,
+        "terpenes": [],
+        "structure": null,
+        "status": null
+      },
+      "plant_after": {
+        "vigor": "10",
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "summary": "vigor 10",
+      "plant_after_json_era": {
+        "vigor": 10,
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "vigor_type_deviation": true
+    },
+    {
+      "name": "vigor_zero_parses_but_is_not_persisted",
+      "text": "{pid} vigor 0",
+      "parse": {
+        "vigor": 0,
+        "terpenes": [],
+        "structure": null,
+        "status": null
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "summary": "observation logged",
+      "note": "update_plant guards with `if observation['vigor']`, so a parsed 0 is falsy and never written. Pinned as-is: JSON-era behavior, not endorsed as correct."
+    },
+    {
+      "name": "all_terpene_keywords",
+      "text": "{pid} fuel gas citrus fruity sweet earthy pine skunky diesel",
+      "parse": {
+        "vigor": null,
+        "terpenes": [
+          "fuel",
+          "gas",
+          "citrus",
+          "fruity",
+          "sweet",
+          "earthy",
+          "pine",
+          "skunky",
+          "diesel"
+        ],
+        "structure": null,
+        "status": null
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": "fuel, gas, citrus, fruity, sweet, earthy, pine, skunky, diesel",
+        "status": "active",
+        "structure": null
+      },
+      "summary": "fuel, gas, citrus, fruity, sweet, earthy, pine, skunky, diesel terps",
+      "note": "terpene order follows TERPENE_KEYWORDS declaration order, not text order"
+    },
+    {
+      "name": "terpenes_are_whole_word_only",
+      "text": "{pid} fueled up and refueling",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": null,
+        "status": null
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "summary": "observation logged",
+      "note": "terpene regex is \\bKEYWORD\\b -- 'fueled' must not match 'fuel'"
+    },
+    {
+      "name": "all_structure_keywords",
+      "text": "{pid} frosty dense sandy sticky purple tight foxtail stretch",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": [
+          "frosty",
+          "dense",
+          "sandy",
+          "sticky",
+          "purple",
+          "tight",
+          "fox.*tail",
+          "stretch"
+        ],
+        "status": null
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "summary": "frosty, dense, sandy, sticky, purple, tight, fox.*tail, stretch",
+      "note": "structure is prefix-matched (\\bKEYWORD, no trailing \\b) and the raw regex source 'fox.*tail' is what lands in the list. Structure is reported in the summary but NEVER written to plant['structure']."
+    },
+    {
+      "name": "structure_is_prefix_matched",
+      "text": "{pid} stretchy and foxtail",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": [
+          "fox.*tail",
+          "stretch"
+        ],
+        "status": null
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "summary": "fox.*tail, stretch",
+      "note": "'stretchy' matches the 'stretch' prefix; structure order follows STRUCTURE_KEYWORDS declaration order"
+    },
+    {
+      "name": "fox_tail_wildcard_spans_a_space",
+      "text": "{pid} fox tails everywhere",
+      "parse": {
+        "vigor": null,
+        "terpenes": [],
+        "structure": [
+          "fox.*tail"
+        ],
+        "status": null
+      },
+      "plant_after": {
+        "vigor": null,
+        "terpene_notes": null,
+        "status": "active",
+        "structure": null
+      },
+      "summary": "fox.*tail"
+    },
+    {
+      "name": "everything_is_case_insensitive",
+      "text": "{pid} VIGOR 10 GAS DIESEL SKUNKY PURPLE STICKY SANDY TIGHT ELITE",
+      "parse": {
+        "vigor": 10,
+        "terpenes": [
+          "gas",
+          "skunky",
+          "diesel"
+        ],
+        "structure": [
+          "sandy",
+          "sticky",
+          "purple",
+          "tight"
+        ],
+        "status": "top_keeper"
+      },
+      "plant_after": {
+        "vigor": "10",
+        "terpene_notes": "gas, skunky, diesel",
+        "status": "top_keeper",
+        "structure": null
+      },
+      "summary": "vigor 10, gas, skunky, diesel terps, sandy, sticky, purple, tight",
+      "note": "matches are case-insensitive but the RECORDED values are the lowercase keyword constants",
+      "plant_after_json_era": {
+        "vigor": 10,
+        "terpene_notes": "gas, skunky, diesel",
+        "status": "top_keeper",
+        "structure": null
+      },
+      "vigor_type_deviation": true
+    }
+  ],
+  "terpene_accumulation": {
+    "description": "update_plant appends to any existing terpene_notes with '; ' and strips a leading '; ' when the field was empty/None.",
+    "steps": [
+      {
+        "existing": null,
+        "text": "{pid} fuel",
+        "expected": "fuel"
+      },
+      {
+        "existing": "",
+        "text": "{pid} fuel",
+        "expected": "fuel"
+      },
+      {
+        "existing": "fuel",
+        "text": "{pid} citrus and pine",
+        "expected": "fuel; citrus, pine"
+      },
+      {
+        "existing": "fuel; citrus, pine",
+        "text": "{pid} sweet",
+        "expected": "fuel; citrus, pine; sweet"
+      },
+      {
+        "existing": "fuel",
+        "text": "{pid} vigor 5",
+        "expected": "fuel"
+      }
+    ]
+  },
+  "known_deviation_from_json_era": {
+    "field": "vigor",
+    "json_era": "int (json.dump/json.load preserved Python's int verbatim)",
+    "markdown_era": "str (e.g. 9 -> '9')",
+    "scope": "PERSISTENCE ONLY. parse_observation() still yields an int and update_plant() still assigns that int to plant['vigor'] in memory -- byte-identical logic to the JSON era. The type changes on the round-trip through plants/<ID>.md.",
+    "cause": "Phase 1's canonical, Joey-approved plant-template.md declares vigor as a free-text STRING ('strong'/'weak'/'average'), not an integer. breeding-markdown/DECISIONS.md records that an integer vigor was explicitly REVERTED as an unapproved schema change (vigor is null on all 95 real plants). The schema-typed read therefore coerces 9 -> '9'.",
+    "why_not_fixed_here": "Making vigor survive as an int would require editing breeding-markdown's approved schema, which Task 2.2 is explicitly forbidden to modify, and would re-introduce the exact change Phase 1's review reverted. The parsing/status-detection contract this task exists to protect is unaffected: plant['status'] is identical under both backends for all three status keywords.",
+    "real_world_impact": "Nil on current data (vigor is null on all 95 real plants); vigor has never been populated in production. Flagged for a product decision, not silently accepted.",
+    "keys": "Cases carrying this deviation record the pre-migration value under 'plant_after_json_era' and set 'vigor_type_deviation': true."
+  }
+}
