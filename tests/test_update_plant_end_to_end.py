@@ -211,3 +211,59 @@ def test_no_end_to_end_run_touched_a_real_project_directory(tmp_path, monkeypatc
     assert after == before
     for project in PROJECTS:
         assert not (BREEDING_ROOT / project / "project.md").exists()
+
+
+# --------------------------------- save_plant (update_markdown's backend) ---
+
+
+def test_save_plant_merges_over_existing_fields(tmp_path):
+    """A partial plant dict must never truncate the stored record."""
+    project = "lantz" if "lantz" in PROJECTS else PROJECTS[0]
+    sandbox, tracker = _seed_sandbox(project, tmp_path)
+    plant = tracker["plants"][0]
+
+    markdown_backend.save_plant({"id": plant["id"], "status": "culled"}, sandbox)
+
+    reloaded = next(
+        p
+        for p in breeding_core.load_tracker(sandbox / "tracker.json")["plants"]
+        if p["id"] == plant["id"]
+    )
+    assert set(reloaded) == set(plant)
+    assert reloaded["status"] == "culled"
+    for field in set(plant) - {"status"}:
+        assert reloaded[field] == plant[field]
+
+
+def test_save_plant_creates_a_new_plant_file(tmp_path):
+    project = "lantz" if "lantz" in PROJECTS else PROJECTS[0]
+    sandbox, _ = _seed_sandbox(project, tmp_path)
+    markdown_backend.save_plant({"id": "NEW01", "status": "active"}, sandbox)
+    assert (sandbox / "plants" / "NEW01.md").is_file()
+
+
+def test_save_plant_leaves_other_plants_and_project_md_untouched(tmp_path):
+    project = "lantz" if "lantz" in PROJECTS else PROJECTS[0]
+    sandbox, tracker = _seed_sandbox(project, tmp_path)
+    if len(tracker["plants"]) < 2:
+        pytest.skip("project has only one plant")
+    before = {
+        p: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in [sandbox / "project.md"]
+        + sorted((sandbox / "plants").glob("*.md"))
+    }
+    target = sandbox / "plants" / f"{tracker['plants'][0]['id']}.md"
+
+    markdown_backend.save_plant(tracker["plants"][0], sandbox)
+
+    for path, digest in before.items():
+        if path == target:
+            continue
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, path
+
+
+def test_save_plant_rejects_an_unsafe_id(tmp_path):
+    project = "lantz" if "lantz" in PROJECTS else PROJECTS[0]
+    sandbox, _ = _seed_sandbox(project, tmp_path)
+    with pytest.raises(ValueError):
+        markdown_backend.save_plant({"id": "../escape", "status": "x"}, sandbox)

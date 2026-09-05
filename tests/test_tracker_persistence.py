@@ -148,6 +148,46 @@ def test_round_trip_adds_no_keys_and_drops_no_keys(sandbox_project, lantz_tracke
         assert set(after) == set(before), before["id"]
 
 
+def test_observation_log_is_schema_guaranteed_on_every_plant_read(
+    sandbox_project, lantz_tracker
+):
+    """Documented exception to exact key-set preservation.
+
+    Phase 1's ``plant_markdown`` stores ``observation_log`` as the markdown
+    BODY and guarantees it on both sides: ``write_plant`` always emits a body
+    and ``read_plant`` always returns the field, precisely so that
+    ``read_plant(write_plant(x))`` stays symmetric. It is therefore a
+    schema-guaranteed field, and a plant saved WITHOUT it loads back WITH it
+    as ``''``. This test pins that contract so it can never regress silently
+    into either behaviour by accident.
+    """
+    tracker = dict(lantz_tracker)
+    tracker["plants"] = [{"id": "SYN01", "status": "active", "vigor": "9"}]
+    core.save_tracker(tracker, sandbox_project / "tracker.json")
+
+    loaded = core.load_tracker(sandbox_project / "tracker.json")
+    plant = loaded["plants"][0]
+
+    assert set(plant) == {"id", "status", "vigor", "observation_log"}
+    assert plant["observation_log"] == ""
+    # ...and it is stable: a second round trip adds nothing further.
+    core.save_tracker(loaded, sandbox_project / "tracker.json")
+    assert core.load_tracker(sandbox_project / "tracker.json") == loaded
+
+
+def test_every_real_plant_already_carries_observation_log(tmp_path):
+    """Why the exception above is harmless in production: no real plant in
+    any of the six projects is missing ``observation_log``, so the
+    schema-guaranteed field never adds a key to a real record."""
+    trackers = sorted((Path.home() / ".hermes" / "breeding").glob("*/tracker.json"))
+    if not trackers:
+        pytest.skip("no real trackers present")
+    for source in trackers:
+        tracker = json.loads(source.read_text(encoding="utf-8"))
+        for plant in tracker["plants"]:
+            assert "observation_log" in plant, f"{source.parent.name}/{plant['id']}"
+
+
 @pytest.mark.parametrize(
     "tracker_name",
     ["mule-fuel-x-nana-glue", "spaced-paste", "kibungan-pheno-hunt",

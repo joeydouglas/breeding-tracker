@@ -22,6 +22,20 @@ Shape-preservation rules (why this module is more than two one-liners):
   without a schema to learn which keys the file actually holds, once with the
   schema to get correctly-typed values. The result is the typed values
   restricted to the keys that were really there.
+
+  **One documented exception: ``observation_log``.** Phase 1 makes it the
+  markdown BODY rather than a frontmatter field, and ``plant_markdown``
+  guarantees it on BOTH sides -- ``write_plant`` always emits a body and
+  ``read_plant`` always returns ``observation_log`` (see its "Always return
+  the body ... omitting it here would break read_plant(write_plant(x))"
+  comment). It is therefore a schema-guaranteed field, not an accident: a
+  plant dict saved WITHOUT ``observation_log`` loads back WITH
+  ``observation_log: ''``. Restricting it away here would contradict the
+  Phase 1 contract and make the round-trip asymmetric, so it is deliberately
+  exempted from the restrict-to-present rule (``_ALWAYS_PRESENT_PLANT_KEYS``).
+  All six real projects' plants already carry the field, so no real record is
+  affected; only a synthetic ``{id, status, vigor}`` plant sees the addition.
+  Regression-tested in ``test_tracker_persistence.py``.
 * **Plant order.** A JSON ``plants`` list is ordered and at least one real
   project (spaced-paste) is not in ID order, so order is caller-visible
   state. It is recorded in ``project.md``'s ``plant_order`` frontmatter key
@@ -69,6 +83,12 @@ PROJECT_FILE = "project.md"
 PLANTS_DIR = "plants"
 PLANTS_KEY = "plants"
 ORDER_KEY = "plant_order"
+
+# Keys ``plant_markdown`` guarantees on every read regardless of what the
+# file held (see the module docstring's "Exact key set" note). Restricting
+# these away would break Phase 1's read_plant(write_plant(x)) symmetry.
+_ALWAYS_PRESENT_PLANT_KEYS = frozenset({"observation_log"})
+
 
 
 # ------------------------------------------------------------- schemas ----
@@ -160,6 +180,32 @@ def load_tracker(tracker_file) -> dict:
 
 
 # ---------------------------------------------------------------- write ----
+
+
+def save_plant(plant, project_dir) -> None:
+    """Write ONE plant's record to ``<project_dir>/plants/<ID>.md``.
+
+    Backs ``breeding_core.update_markdown()``, which the six wrappers expose
+    directly. Unlike ``save_tracker`` this is a merge, not a whole-roster
+    rewrite: the supplied fields are laid over whatever the file already
+    holds, so calling it with a partial plant dict can never truncate a
+    stored record, and it never touches ``project.md`` or any other plant.
+    """
+    if not isinstance(plant, dict):
+        raise TypeError(f"plant must be a dict, got {type(plant).__name__}")
+
+    project_markdown, plant_markdown, _project_schema, plant_schema = _schemas()
+    plant_id = _validate_plant_id(plant.get("id"))
+
+    path = Path(project_dir).expanduser() / PLANTS_DIR / f"{plant_id}.md"
+    merged = {}
+    if path.exists():
+        existing_present = set(plant_markdown.read_plant(path))
+        existing_typed = plant_markdown.read_plant(path, schema=plant_schema)
+        merged.update(_restrict_to_present(existing_typed, existing_present))
+    merged.update(plant)
+
+    plant_markdown.write_plant(path, merged, schema=plant_schema)
 
 
 def save_tracker(tracker, tracker_file) -> None:

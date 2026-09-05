@@ -165,8 +165,10 @@ def update_plant(plant_id, observation, config, photo_count=0):
     # saved the tracker -- we must NOT touch plant['photos'] here or we'd
     # double-write it.
 
+    # save_tracker() writes plants/<ID>.md itself now (see update_markdown's
+    # docstring for why the old, separate update_markdown() call that used to
+    # sit here would immediately overwrite what save_tracker just wrote).
     save_tracker(tracker, config['TRACKER_FILE'])
-    update_markdown(plant, config['BREEDING_DIR'])
 
     subprocess.run(['python3', str(config['BREEDING_DIR'] / 'generate_dashboard.py')],
                     cwd=config['BREEDING_DIR'], capture_output=True)
@@ -188,41 +190,32 @@ def update_plant(plant_id, observation, config, photo_count=0):
 
 
 def update_markdown(plant, breeding_dir):
-    """Write the plant's markdown file."""
-    plant_id = plant['id']
-    md_file = breeding_dir / 'plants' / f"{plant_id}.md"
+    """Refresh one plant's markdown record at ``plants/<ID>.md``.
 
-    photo_count = len(plant.get('photos', []))
-    drive_url = plant.get('photos_drive_url', '')
+    PHASE 2 / TASK 2.1 COLLISION FIX. In the JSON era this function wrote a
+    *derived view*: ``tracker.json`` was the record of truth, and
+    ``plants/<ID>.md`` was a regenerated human-readable report (minimal
+    ``plant_id``/``cross``/``status`` frontmatter plus a rendered body).
 
-    content = f"""---
-plant_id: {plant_id}
-cross: {plant['cross']}
-status: {plant['status']}
----
+    After the markdown migration ``plants/<ID>.md`` IS the record of truth --
+    ``save_tracker()`` writes it through Phase 1's ``plant_markdown.write_plant``
+    with full frontmatter. The old derived-view writer therefore collided with
+    it: called right after ``save_tracker()`` it overwrote a 19-field plant
+    with its own 3-key frontmatter, dropping ``id`` (spelled ``plant_id`` in
+    the view), ``photos``, ``original_notes`` and everything else, so the next
+    observation raised ``KeyError('id')``. Nothing regenerable was gained: the
+    report was a strictly lossy projection of the record it clobbered.
 
-# {plant_id}
-
-## Status
-**{plant['status'].title()}**
-
-## Photos
-{photo_count} photos uploaded to [Google Drive]({drive_url})
-
-## Observations
-
-{plant.get('observation_log', '')}
-
-## Timeline
-
-| Date | Event |
-|------|-------|
-| TBD  | Observations to be added |
-"""
-
-    md_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(md_file, 'w') as f:
-        f.write(content)
+    So the derived view is gone (option (c): it is now fully redundant with
+    the backend record) and this function persists the plant record instead.
+    The signature is unchanged because all six wrappers expose
+    ``update_markdown(plant)`` verbatim. It is non-destructive: the supplied
+    fields are merged over whatever is already on disk, so a partial dict can
+    never truncate a stored plant. ``update_plant()`` no longer calls it --
+    ``save_tracker()`` already wrote the file -- but a direct wrapper call is
+    still safe and idempotent.
+    """
+    markdown_backend.save_plant(plant, breeding_dir)
 
 
 def push_to_github(breeding_dir, github_repo, disable_push):
