@@ -225,3 +225,128 @@ reference only and deliberately not modified -- Tasks 1.1 and 1.4 already
 passed review.
 
 Final state: 248 tests, 100% green, zero warnings (`pytest -W error`).
+
+## Task 1.2 / 1.3 / 1.4 code-quality review findings (2026-09-05)
+
+1 Critical + 7 Important issues, all empirically reproduced by the reviewer
+with probe scripts before any fix, all fixed under strict TDD (regression
+test watched RED, then GREEN, full suite re-run after each group).
+
+### Critical: `migration.py` commit-stranding
+
+Exactly the same class of bug as the push-stranding one fixed in the
+previous review, one step earlier in the same function. If `git add` or
+`git commit` failed AFTER `apply_new_fields` had already rewritten the
+files on disk, the run was correctly reported `failed` -- but the rewritten
+files stayed **uncommitted in the working tree**. On the retry,
+`apply_new_fields` saw files that already matched the template
+(`changed=False`), so no commit was attempted; local `HEAD` still equalled
+the remote tip from before, so no push was attempted either; and the run
+recorded `status=success` at the current template version. The edits then
+sat as permanent uncommitted local changes while the repo was marked
+migrated forever.
+
+Fixed by refusing to conflate "the local file matches the template" with
+"this repo's edits are committed", the same way the push fix refuses to
+conflate it with "pushed": `_migrate_one_repo` now runs
+`git status --porcelain` over the migration-managed paths
+(`project.md`, `plants/*.md`) before recording success. Dirty managed paths
+mean a previous run's edits were stranded, so they are committed and pushed
+on this run; if they are somehow still dirty afterwards, that is a hard
+failure, never a skip-as-already-done.
+
+### `migration.py`: three more real bugs
+
+1. **Three unhandled paths aborted the ENTIRE batch** rather than isolating
+   to one repo, defeating the "one repo's failure must not abort the batch"
+   contract the module's own `except` comment claims: (a) a registry entry
+   missing the `name` key raised a bare `KeyError` from OUTSIDE the try
+   block; (b) a corrupt/truncated state file made `_load_state`'s
+   `json.loads` raise `JSONDecodeError` before the loop even started,
+   bricking every future run of the migration permanently; (c) a
+   `state_path` whose parent directory did not exist raised
+   `FileNotFoundError` from the FIRST `_save_state` -- which only happens
+   *after* a repo has already migrated and pushed, losing that record.
+   Fixed: per-entry `name`/`path` validation now happens inside the loop and
+   reports a per-repo failure; `_load_state` degrades to an empty state on a
+   corrupt/unreadable/wrong-shaped file (re-doing idempotent work is far
+   cheaper than bricking the migration); `_save_state` mkdirs its parent.
+2. **Detached HEAD pushed to a garbage branch.**
+   `git rev-parse --abbrev-ref HEAD` returns the literal string `HEAD` on a
+   detached HEAD, which was then used as the push TARGET
+   (`push origin HEAD:refs/heads/HEAD`) -- creating a junk `HEAD` branch on
+   the remote, reporting success, and never reaching the repo's real branch.
+   There is no correct branch to infer, so this is now a hard failure for
+   that repo.
+3. **No rollback on failure, and a report that discarded what it touched.**
+   Every failure path left half-applied edits dirty in the working tree,
+   which then collide with the next run or with a human/data-api's
+   `git pull` -- and the failure report hardcoded `added_fields={}`,
+   throwing away exactly the information a human needs to work out what
+   state the repo was left in. Fixed: `_migrate_one_repo` now wraps the work,
+   restores the migration-managed paths to `HEAD` on failure (best-effort,
+   so a failing rollback never masks the original error), and raises a new
+   `RepoMigrationError` carrying the paths/fields actually touched, which
+   both the report and the state file now record.
+
+### `project_markdown.py` had drifted behind `plant_markdown.py` again
+
+The Task 1.2 spec-compliance review ported 8 fixes across; these 3 were
+missed and are the exact behaviours where the two modules diverged:
+
+1. **Arbitrary/dangerous YAML tags were accepted** (`!!set`, `!!binary`,
+   `!!omap`, `!!pairs`, `!custom`, `!!python/name:os.system`) where
+   `plant_markdown.py` rejects them. The `None` (fallback) constructor was
+   registered as `_plain_scalar`, which re-resolved the node's VALUE through
+   the implicit resolver and silently discarded the tag. Ported
+   `_reject_unknown_tag` and `_reject_collection_tag`.
+2. **Unaliased anchor DEFINITIONS were accepted** (`cross_name: &a big`),
+   directly contradicting the module's own docstring claim that anchors are
+   refused outright: the guard was still the pre-fix lambda checking only
+   `AliasEvent`. Ported `_compose_node_reject_anchors`, which checks
+   `event.anchor` on every composable event (scalar, sequence-start,
+   mapping-start, alias), catching definitions and references alike.
+3. **Block scalars were type-coerced.** `_plain_scalar` short-circuited on
+   quote styles (`'`, `"`) only, not block styles (`|`, `>`), so
+   `cross_name: >-\n  07` yielded the int `7` -- violating both the YAML
+   spec (block scalars are ALWAYS strings) and the module's own "declared
+   types win" rule. Ported the full style check.
+
+### Test-suite drift between the two modules
+
+`project_markdown.py`'s suite was missing ~15 tests that exist for
+`plant_markdown.py` covering exactly the divergent behaviours above -- which
+is *why* the drift went unnoticed twice. Added the project equivalents,
+mirroring the plant suite's class/test names and adapted to project.md's
+schema: YAML collection-tag rejection (4), custom/`!!python/name` tag
+rejection (3), anchor rejection on scalar/mapping/sequence (3),
+block-scalar type-string tests (5), unhashable-key rejection (1), and CRLF
+rewrite byte-stability (1). Keeping the two suites symmetrical is the
+mechanism that stops this drifting a third time.
+
+`scaffolding.py`'s suite was almost entirely happy-path; added 9 tests for
+the failure modes a real caller can hit: an override violating the declared
+schema type, a nonexistent template path, a template with no frontmatter, a
+template accidentally authored as example values rather than descriptors,
+and a non-mapping/None `overrides` argument. The override-type test
+deliberately PINS current behaviour (written out unvalidated, then
+unreadable with the same schema) rather than demanding a fix, since
+override validation is on the accepted-debt list below -- the test exists to
+make the behaviour visible and fail loudly if it silently changes.
+
+### Minor findings documented, deliberately not fixed
+
+Following Task 1.1's precedent of documenting rather than fixing issues
+that risk no data loss, crash, or wrong behaviour on the real
+breeding-tracker data: the `type: 'list'` coercion gap in
+`project_markdown.py`; `scaffolding.py` accepting unvalidated override
+values and typo'd keys; the TOCTOU window on `scaffolding.py`'s
+`FileExistsError` guard; `migration.py`'s filename-heuristic module
+dispatch (`project.md` == project, everything else == plant);
+`MigrationReport.__repr__`; unvalidated registry paths; subprocess `stderr`
+not being surfaced in failure messages; `_no_anchors`'s untyped signature;
+and `import copy` sitting inside `_default_for` instead of at module scope.
+
+Final state: 284 tests, 100% green, zero warnings (`pytest -W error`),
+re-run independently after each commit rather than trusted from any
+subagent's self-report.
