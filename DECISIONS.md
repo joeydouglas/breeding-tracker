@@ -471,23 +471,76 @@ fails if any origin names `github.com`. No Discord, Drive or network call
 anywhere. `generate_dashboard.py` is deliberately not copied into the sandbox,
 so `update_plant`'s dashboard subprocess is a harmless, already-unchecked no-op.
 
-## Task 2.5 — project routing became DATA, in a new local-only `breeding-meta` repo
+## Task 2.5 — project routing built as DATA (`registry.json`), proven but not yet adopted
 
-### The plan described a `_CROSS_DIRS` dict that never existed
+### The plan described a `_CROSS_DIRS` dict — it exists, but not in this file
 
 Task 2.5's brief was "replace the hardcoded `_CROSS_DIRS` dict in
 `breeding_core.py` with a read of `registry.json`". Reading the actual file
-first: there is no `_CROSS_DIRS` dict, and there never was. `breeding_core.py`
-knew *nothing* about which projects exist — every one of the six
-`monitor_breeding_notes.py` wrappers hand-built its own complete `CONFIG` dict
-and passed it in.
+first: there is no `_CROSS_DIRS` in `breeding_core.py`, and there never was.
 
-So the coupling the task exists to fix is real, but it was **distributed across
-the six wrappers** rather than centralized in one dict. The consequence is the
-same one the plan cared about: adding a seventh cross required authoring a
-seventh wrapper — a code change. We implemented the smallest mechanism that
-actually removes *that* coupling rather than inventing a `_CROSS_DIRS` dict
-just so we could delete it.
+But `_CROSS_DIRS` is **not** a fiction. A real, live one exists today:
+
+```python
+# ~/.hermes/breeding/_shared/breeding-ingest/integrations/hermes-breeding-ingest/__init__.py
+# (lines ~55-63)
+_CROSS_DIRS: dict[str, Path] = {
+    "MG":  Path.home() / ".hermes" / "breeding" / "mule-fuel-x-nana-glue",
+    "Ltz": Path.home() / ".hermes" / "breeding" / "lantz",
+    ...
+}
+```
+
+That is the **actual production prefix-router** — it maps a plant-ID prefix to
+the project directory that owns it, which is exactly the routing table this
+task is about. Its own preceding comment spells the coupling out: *"Adding a
+new cross: (1) add its prefix+regex to `PLANT_ID_REGISTRY` in
+`discord_ingest.py`, (2) scaffold its `BREEDING_DIR` …, (3) add one line
+here."*
+
+So the plan's premise was **misfiled, not wrong**. The dict it named is real
+and is the right thing to replace; the plan only put it in the wrong file,
+assuming it lived in `breeding_core.py` when it actually lives in the gateway
+plugin repo (`breeding-ingest`). The coupling is genuine and is spread across
+three code locations:
+
+1. `_CROSS_DIRS` in `hermes-breeding-ingest/__init__.py` — prefix → directory.
+2. `PLANT_ID_REGISTRY` in `breeding_tracker/discord_ingest.py` — prefix → regex.
+3. one hand-written `monitor_breeding_notes.py` wrapper per project, each with
+   its own complete hardcoded `CONFIG`.
+
+We built the mechanism that can replace all three — `registry.json` already
+carries every field they encode — and proved it works. Whether it is *adopted*
+is a separate matter, recorded immediately below.
+
+### ⚠️ SCOPE: this task built the replacement, it did NOT deploy it
+
+**Nothing in production reads `registry.json` today.** `route_message()` and
+`config_for_project()` work, are tested, and are ready — but no gateway, plugin
+or wrapper calls them yet.
+
+Concretely: **adding a 7th real breeding project still requires 3 manual code
+changes right now**, exactly as it did before Task 2.5:
+
+1. a prefix entry in `_CROSS_DIRS` in
+   `_shared/breeding-ingest/integrations/hermes-breeding-ingest/__init__.py`;
+2. a matching `(prefix, compiled_regex)` entry in `PLANT_ID_REGISTRY` in
+   `_shared/breeding-ingest/breeding_tracker/discord_ingest.py`;
+3. authoring a 7th `monitor_breeding_notes.py` wrapper.
+
+What Task 2.5 delivers is a **proven replacement candidate**: the acceptance
+criterion ("a new project in `registry.json` routes with zero code change to
+`breeding_core.py`") is met literally and demonstrably, with a fictional
+seventh project and `breeding_core.py`'s SHA-256 asserted unchanged. What it
+does **not** deliver is migration. Rewiring the gateway's `_CROSS_DIRS` and
+`PLANT_ID_REGISTRY` to consume `registry.json`, and replacing the
+wrapper-authoring step with a registry entry, is a **distinct future task** —
+it edits the `breeding-ingest` gateway repo, which is outside this refactor's
+scope, and only then does the 3-change checklist above collapse to one data
+commit.
+
+Do not read the passing acceptance test as "adding a cross is now data-only in
+production." It is not, yet.
 
 ### `breeding-meta` is local-only, with no GitHub remote
 
@@ -573,10 +626,75 @@ Derived, never stored:
 config key, even though Task 2.3 reduced it to signature-compatibility baggage
 (pushes now go to each repo's own `origin`).
 
-`test_registry_config_matches_the_wrappers_hardcoded_config` asserts the
-registry-derived config equals the real wrapper's `CONFIG` field-for-field for
-all six projects — the guard against `registry.json` being a plausible-looking
-parallel invention that has quietly drifted from reality.
+`test_registry_config_matches_the_wrappers_hardcoded_config` guards
+`registry.json` against being a plausible-looking parallel invention that has
+quietly drifted from reality — but it does **not** compare every field, and its
+docstring no longer claims it does. What it actually asserts, per project:
+
+* `CROSS_NAME`, `AUTO_CREATE`, `GITHUB_REPO` — compared directly to the
+  wrapper's `CONFIG`.
+* the prefix fields — `PLANT_ID_PATTERN` + `PLANT_ID_PREFIX`, or the
+  `PLANT_ID_REGISTRY` prefix/pattern pairs, including that the *other* shape is
+  absent.
+* the two derived fields, checked as *derivations* rather than values:
+  `TRACKER_FILE == BREEDING_DIR / 'tracker.json'` on both sides, and
+  `DISABLE_GITHUB_PUSH` reading `True` on both sides off the sandbox's
+  `BREEDING_DISABLE_PUSH=1` — proving both read one source rather than the
+  registry hardcoding a lucky match.
+
+`BREEDING_DIR` is deliberately **not** compared in that test, because it
+*cannot* be: `_load_wrapper` redirects the wrapper to a `tmp_path` sandbox via
+the `BREEDING_DIR` env var, so the wrapper's in-test value is the sandbox, not
+its real default. Comparing it there would assert nothing. It is covered
+separately instead — see below.
+
+We narrowed the claim rather than extending the test to cover `BREEDING_DIR`
+inline, because the honest comparison requires *not* importing the wrapper.
+
+### The wrapper/registry `BREEDING_DIR` divergence is now asserted, not ignored
+
+`test_registry_breeding_dir_matches_the_wrappers_default` compares each
+wrapper's hardcoded `BREEDING_DIR` default against the registry's
+`breeding_dir`. It reads the default out of the wrapper **source text** rather
+than importing the module, precisely because importing would pick up the
+sandbox env var and hide the real value.
+
+Five of six agree. One does not, and it is real:
+
+| project | wrapper default | registry `breeding_dir` |
+|---|---|---|
+| `honey-badger-haze-pheno-hunt` | `~/.hermes/breeding/honey-badger-haze` | `~/.hermes/breeding/honey-badger-haze-pheno-hunt` |
+
+**The registry value is the correct one; neither file was changed.** The
+wrapper's default is dead code in practice: the gateway plugin's
+`_run_for_cross()` sets the `BREEDING_DIR` environment variable to the cross's
+real directory before importing the wrapper, and the wrapper reads the env var
+first (`os.environ.get('BREEDING_DIR') or <default>`). The stale default only
+ever applies if someone runs that wrapper by hand from a shell.
+
+This was previously *silently unchecked* — exactly the class of drift the guard
+test exists to catch. It is now pinned in
+`KNOWN_WRAPPER_REGISTRY_DIR_DIVERGENCE` with both values asserted explicitly
+plus an assertion that they still differ, so: a future reader cannot mistake it
+for an oversight, nobody "fixes" the registry to match a stale wrapper, and if
+the wrapper's default is ever repaired the test fails and says to delete the
+entry. Fixing the wrapper itself is out of scope here — all six are pinned
+byte-identical by SHA-256.
+
+### `breeding_dir` is validated like every other required field
+
+`_validate_registry` originally checked `slug`, `schema_version`,
+`plant_id_prefixes` and prefix uniqueness — but not `breeding_dir`. An entry
+missing it loaded clean and then died much later inside `config_for_project`
+as a bare `KeyError: 'breeding_dir'`, by which point the traceback no longer
+identified *which* project was malformed.
+
+Now it fails at load, loud, with the offending slug named, consistent with
+every other required field. Blank and whitespace-only strings count as missing:
+an empty path resolves to the process CWD, which would scatter a cross's plant
+markdown into whatever directory the bot happened to start in — worse than an
+error, because it looks like success. Regression tests cover the absent case
+and the `""` / `"   "` / `null` cases.
 
 ### Templates are NOT duplicated here
 
@@ -591,8 +709,10 @@ Out of scope, and left deliberately untouched: all six are still byte-identical
 (pinned by SHA-256 in both `test_wrapper_compatibility.py` and
 `test_task_2_5_did_not_touch_any_real_wrapper`) and still route off their own
 `CONFIG` dicts. `registry.json` describes them accurately and `route_message()`
-routes them correctly, but nothing in production consumes it yet — this task
-builds and *proves* the mechanism; adopting it is a later task.
+routes them correctly, but nothing in production consumes it yet — neither the
+wrappers nor the gateway's `_CROSS_DIRS` / `PLANT_ID_REGISTRY`. This task
+builds and *proves* the mechanism; adopting it is a later task (see the SCOPE
+note above).
 
 The acceptance criterion is consequently proven with a fictional **seventh**
 project rather than a real one, exactly as the task specified: a sandbox

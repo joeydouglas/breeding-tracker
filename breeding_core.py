@@ -429,22 +429,36 @@ def extract_plant_ids_registry(message_text, registry):
 # ---------------------------------------------------------------------------
 # PROJECT ROUTING REGISTRY (Phase 2 / Task 2.5)
 #
-# Which projects exist, and which plant-ID prefix belongs to which, used to be
-# knowledge encoded in CODE: each of the six per-project
-# `monitor_breeding_notes.py` wrappers hardcoded its own full CONFIG dict, so
-# a seventh cross meant authoring a seventh wrapper. (The finalized plan
-# described this as a hardcoded `_CROSS_DIRS` dict in this file; no such dict
-# ever existed here -- the hardcoding was distributed across the wrappers
-# instead. Same coupling, different shape. See DECISIONS.md.)
+# Which projects exist, and which plant-ID prefix belongs to which, is knowledge
+# encoded in CODE today, in TWO places -- neither of them this file:
 #
-# That routing table is now DATA: `registry.json` in the `breeding-meta` git
-# repo. Adding a project to it -- and pushing -- routes that project's prefix
-# with no code change here, which is Task 2.5's acceptance criterion and is
-# proven literally by tests/test_registry_routing.py.
+#   1. `_CROSS_DIRS: dict[str, Path]` in the gateway plugin, at
+#      `_shared/breeding-ingest/integrations/hermes-breeding-ingest/__init__.py`
+#      (~lines 55-63). THAT is the real, live prefix -> project-directory
+#      router in production; its own comment says adding a new cross requires
+#      a line there.
+#   2. `PLANT_ID_REGISTRY` in `_shared/breeding-ingest/breeding_tracker/
+#      discord_ingest.py` (~line 25), the prefix -> regex table.
 #
-# The six live wrappers are deliberately NOT migrated onto this yet; they keep
-# working byte-identically off their own CONFIG dicts. Migration is a later
-# task.
+# ...plus a per-project `monitor_breeding_notes.py` wrapper, each of which
+# hardcodes its own full CONFIG dict.
+#
+# So the finalized plan's premise was MISFILED, not wrong: a hardcoded
+# `_CROSS_DIRS` really does exist and really is the coupling worth removing --
+# it just lives in the gateway plugin repo, not in `breeding_core.py` as the
+# plan assumed. See DECISIONS.md.
+#
+# Task 2.5 builds that routing table as DATA -- `registry.json` in the
+# `breeding-meta` git repo -- and PROVES the mechanism: adding a project to it
+# and pushing routes that project's prefix with no code change here, which is
+# Task 2.5's acceptance criterion and is proven literally by
+# tests/test_registry_routing.py.
+#
+# SCOPE: this is a proven REPLACEMENT CANDIDATE, not an adopted one. Nothing in
+# production reads `registry.json` yet. Migrating the gateway's `_CROSS_DIRS`
+# (and `PLANT_ID_REGISTRY`, and the wrapper-authoring step) onto it is separate,
+# out-of-scope future work. The six live wrappers are deliberately NOT migrated;
+# they keep working byte-identically off their own CONFIG dicts.
 # ---------------------------------------------------------------------------
 
 _DEFAULT_META_REPO = Path(__file__).resolve().parent.parent / "breeding-meta"
@@ -558,6 +572,20 @@ def _validate_registry(data, path):
             raise ValueError(f"{path}: duplicate project slug {slug!r}")
         seen_slugs.add(slug)
 
+        # ``breeding_dir`` is required, and required LOUDLY here rather than
+        # left to explode later as a bare KeyError inside config_for_project:
+        # by then the traceback no longer says which project was malformed.
+        # Blank/whitespace counts as missing -- an empty path silently resolves
+        # to the process CWD, which would scatter a cross's plant markdown into
+        # whatever directory the bot happened to start in.
+        breeding_dir = entry.get('breeding_dir')
+        if not isinstance(breeding_dir, str) or not breeding_dir.strip():
+            raise ValueError(
+                f"{path}: project {slug!r} has no usable 'breeding_dir' "
+                f"(got {breeding_dir!r}); every project must name the "
+                "directory its tracker.json and plant markdown live in"
+            )
+
         for prefix, _ in _compile_prefixes(entry):
             if prefix in seen_prefixes:
                 raise ValueError(
@@ -656,9 +684,13 @@ def route_message(message_text, pull=True, registry=None):
     ``pull`` refreshes the breeding-meta checkout first so a newly added
     project routes on the very next message.
 
-    This is the prefix -> project lookup that used to be implicit in "which
-    wrapper did the gateway happen to load". A caller feeds the returned
-    ``config`` straight to ``process_message``.
+    This is the prefix -> project lookup that lives in production as the
+    gateway plugin's hardcoded ``_CROSS_DIRS`` dict
+    (``hermes-breeding-ingest/__init__.py``) combined with "which wrapper did
+    the gateway happen to load". This function is the data-driven replacement
+    CANDIDATE for that pair -- proven working, but not yet adopted by the
+    gateway. A caller feeds the returned ``config`` straight to
+    ``process_message``.
     """
     registry = registry if registry is not None else load_registry(pull=pull)
 

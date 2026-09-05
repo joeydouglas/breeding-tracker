@@ -1,18 +1,34 @@
-"""Task 2.5: project routing is DATA (``registry.json``), not code.
+"""Task 2.5: project routing as DATA (``registry.json``) -- built and proven.
 
-Before this task, ``breeding_core.py`` knew nothing about which projects
-exist -- every one of the six ``monitor_breeding_notes.py`` wrappers handed
-it a fully hardcoded ``CONFIG`` dict. Adding a seventh cross therefore meant
-authoring a seventh wrapper. (The finalized plan called this "replace the
-hardcoded ``_CROSS_DIRS`` dict"; no such dict ever existed in this codebase
--- the hardcoding was distributed across the six wrappers instead. Same
-problem, different shape. See DECISIONS.md.)
+Project routing is encoded in CODE today, in three places, none of which is
+``breeding_core.py``:
 
-Task 2.5 adds the missing routing table as *data*: a ``registry.json`` in a
-separate ``breeding-meta`` git repo that ``breeding_core.py`` clones locally
-and ``git pull``s before each ingestion run.
+* ``_CROSS_DIRS: dict[str, Path]`` in the gateway plugin, at
+  ``_shared/breeding-ingest/integrations/hermes-breeding-ingest/__init__.py``
+  (~lines 55-63) -- the REAL production prefix -> project-directory router,
+  whose own comment states that adding a new cross requires a line there.
+* ``PLANT_ID_REGISTRY`` in ``_shared/breeding-ingest/breeding_tracker/
+  discord_ingest.py`` -- the prefix -> regex table.
+* each of the six ``monitor_breeding_notes.py`` wrappers, which hands
+  ``breeding_core`` a fully hardcoded ``CONFIG`` dict.
 
-The acceptance criterion from the plan is literal and is proven by
+The finalized plan called this task "replace the hardcoded ``_CROSS_DIRS``
+dict". That dict genuinely exists and is genuinely the coupling worth
+removing -- the plan simply MISFILED it, placing it in ``breeding_core.py``
+rather than the gateway plugin. The premise was right; the address was wrong.
+See DECISIONS.md.
+
+Task 2.5 builds the routing table as *data*: a ``registry.json`` in a separate
+``breeding-meta`` git repo that ``breeding_core.py`` reads locally and
+``git pull``s before each ingestion run.
+
+SCOPE -- what these tests do and do NOT prove. They prove the mechanism works:
+the acceptance criterion below is literal and passes. They do NOT prove
+adoption. Nothing in production reads ``registry.json`` yet; ``_CROSS_DIRS``,
+``PLANT_ID_REGISTRY`` and the six wrappers are all untouched and still
+authoritative. Migrating them onto the registry is separate future work.
+
+The acceptance criterion from the plan is proven by
 ``test_acceptance_new_project_routes_with_zero_code_change`` below:
 
     adding a new project to registry.json and pushing, then running
@@ -26,6 +42,7 @@ project directory, or the real ``breeding-meta`` checkout's remote.
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -125,10 +142,16 @@ def test_real_registry_prefixes_match_the_real_wrappers():
 def test_registry_config_matches_the_wrappers_hardcoded_config(
     project, tmp_path, monkeypatch
 ):
-    """The registry-derived CONFIG is the wrapper's CONFIG, field for field.
+    """The registry-derived CONFIG agrees with the wrapper's CONFIG.
 
-    This is the proof that registry.json is a faithful description of the
-    six live projects rather than a plausible-looking parallel invention.
+    NOT a field-for-field comparison -- see the assertions below for exactly
+    what is checked: CROSS_NAME, AUTO_CREATE, GITHUB_REPO, the prefix fields,
+    and that TRACKER_FILE / DISABLE_GITHUB_PUSH are *derived* the same way on
+    both sides. BREEDING_DIR is covered separately (it cannot be compared here
+    -- the wrapper is sandbox-redirected via its env var).
+
+    This is the guard against registry.json being a plausible-looking parallel
+    invention that has quietly drifted from the six live projects.
     """
     wrapper = _load_wrapper(project, tmp_path / project, monkeypatch)
     expected = wrapper.CONFIG
@@ -153,6 +176,90 @@ def test_registry_config_matches_the_wrappers_hardcoded_config(
 
     # TRACKER_FILE is derived, never stored -- exactly as every wrapper does.
     assert got["TRACKER_FILE"] == got["BREEDING_DIR"] / "tracker.json"
+    assert expected["TRACKER_FILE"] == expected["BREEDING_DIR"] / "tracker.json"
+
+    # DISABLE_GITHUB_PUSH is likewise derived, from the same env var in both.
+    # ``_load_wrapper`` sets BREEDING_DISABLE_PUSH=1 for the sandbox, so both
+    # sides must read True here -- proving they share one source, not that the
+    # registry happens to hardcode a matching value.
+    assert got["DISABLE_GITHUB_PUSH"] == expected["DISABLE_GITHUB_PUSH"] is True
+
+    # BREEDING_DIR is deliberately NOT compared here: ``_load_wrapper`` points
+    # the wrapper at a tmp_path sandbox via the BREEDING_DIR env var, so the
+    # wrapper's value in this test is the sandbox, not its real default. The
+    # registry-vs-wrapper BREEDING_DIR comparison lives in
+    # ``test_registry_breeding_dir_matches_the_wrappers_default`` below, which
+    # reads the default out of the wrapper source without importing it.
+
+
+# ``BREEDING_DIR = Path(os.environ.get('BREEDING_DIR') or (Path.home() / ...))``
+_WRAPPER_DEFAULT_DIR_RE = re.compile(
+    r"^BREEDING_DIR\s*=.*?Path\.home\(\)\s*(/\s*'[^']+'\s*)+", re.MULTILINE
+)
+_SEGMENT_RE = re.compile(r"/\s*'([^']+)'")
+
+# KNOWN, DELIBERATE divergence -- asserted rather than silently skipped.
+#
+# honey-badger-haze-pheno-hunt's wrapper defaults BREEDING_DIR to
+# ``~/.hermes/breeding/honey-badger-haze``, but the project directory (and so
+# registry.json's breeding_dir) is ``~/.hermes/breeding/honey-badger-haze-pheno-hunt``.
+#
+# This is NOT an oversight in either file, and neither value is being changed:
+# the wrapper's default is dead in practice. The gateway plugin
+# (hermes-breeding-ingest/__init__.py::_run_for_cross) sets the BREEDING_DIR
+# environment variable to the cross's real directory before importing the
+# wrapper, and the wrapper reads that env var first -- so the hardcoded default
+# is only ever used if someone runs the wrapper by hand from a shell. The
+# registry value is the correct one. Recorded here explicitly so a future
+# reader does not "fix" the registry to match a stale wrapper default, and so
+# that if the wrapper's default is ever repaired this test fails loudly and
+# tells them to delete this entry.
+KNOWN_WRAPPER_REGISTRY_DIR_DIVERGENCE = {
+    "honey-badger-haze-pheno-hunt": (
+        Path.home() / ".hermes" / "breeding" / "honey-badger-haze",  # wrapper default
+        Path.home() / ".hermes" / "breeding" / "honey-badger-haze-pheno-hunt",  # registry
+    ),
+}
+
+
+def _wrapper_default_breeding_dir(project):
+    """The wrapper's hardcoded BREEDING_DIR default, read from SOURCE.
+
+    Parsed rather than imported on purpose: importing sets BREEDING_DIR from
+    the environment, which is exactly the value we are trying NOT to observe.
+    """
+    path = BREEDING_ROOT / project / "monitor_breeding_notes.py"
+    if not path.exists():
+        pytest.skip(f"wrapper for {project} not present")
+    match = _WRAPPER_DEFAULT_DIR_RE.search(path.read_text(encoding="utf-8"))
+    assert match, f"could not parse BREEDING_DIR default out of {path}"
+    return Path.home().joinpath(*_SEGMENT_RE.findall(match.group(0)))
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+def test_registry_breeding_dir_matches_the_wrappers_default(project):
+    """registry.json's ``breeding_dir`` vs the wrapper's hardcoded default.
+
+    They agree for five of six projects. The sixth divergence is real,
+    currently harmless, and asserted explicitly above rather than left to pass
+    silently -- see KNOWN_WRAPPER_REGISTRY_DIR_DIVERGENCE for why it exists.
+    """
+    wrapper_default = _wrapper_default_breeding_dir(project)
+    registry_dir = Path(
+        core.registry_entry(project)["breeding_dir"]
+    ).expanduser()
+
+    if project in KNOWN_WRAPPER_REGISTRY_DIR_DIVERGENCE:
+        expected_wrapper, expected_registry = \
+            KNOWN_WRAPPER_REGISTRY_DIR_DIVERGENCE[project]
+        assert wrapper_default == expected_wrapper, (
+            f"{project}'s wrapper default changed; if it was repaired to match "
+            "the registry, delete its KNOWN_WRAPPER_REGISTRY_DIR_DIVERGENCE entry"
+        )
+        assert registry_dir == expected_registry
+        assert wrapper_default != registry_dir  # the documented divergence
+    else:
+        assert registry_dir == wrapper_default
 
 
 @pytest.mark.parametrize(
@@ -213,6 +320,46 @@ def test_duplicate_prefix_across_projects_is_rejected(meta_repo, tmp_path):
 def test_registry_entry_raises_for_unknown_slug():
     with pytest.raises(KeyError):
         core.registry_entry("no-such-project")
+
+
+def test_entry_without_breeding_dir_is_rejected_at_load_time(meta_repo, tmp_path):
+    """A missing ``breeding_dir`` must fail loud at load, like every other
+    required field.
+
+    Regression test. Previously ``breeding_dir`` was the one required field
+    ``_validate_registry`` did NOT check: an entry missing it loaded clean and
+    only blew up later, deep inside ``config_for_project``, as an opaque
+    ``KeyError: 'breeding_dir'`` with no indication of which project was at
+    fault. Every other required field (``slug``, ``plant_id_prefixes``) fails
+    at load with the slug named; this one now does too.
+    """
+    entry = _project_entry(
+        "no-dir", tmp_path / "x", [{"prefix": "ND", "pattern": r"\bND(\d{1,2})\b"}]
+    )
+    del entry["breeding_dir"]
+    _write_registry(meta_repo, [entry])
+
+    with pytest.raises(ValueError) as exc:
+        core.load_registry()
+    assert "no-dir" in str(exc.value)
+    assert "breeding_dir" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["", "   ", None])
+def test_empty_breeding_dir_is_rejected_at_load_time(meta_repo, tmp_path, bad):
+    """Present-but-empty is as broken as absent -- an empty path would resolve
+    to the process CWD and scatter plant markdown wherever the bot was started.
+    """
+    entry = _project_entry(
+        "blank-dir", tmp_path / "x", [{"prefix": "BD", "pattern": r"\bBD(\d{1,2})\b"}]
+    )
+    entry["breeding_dir"] = bad
+    _write_registry(meta_repo, [entry])
+
+    with pytest.raises(ValueError) as exc:
+        core.load_registry()
+    assert "blank-dir" in str(exc.value)
+    assert "breeding_dir" in str(exc.value)
 
 
 # ------------------------------------------------------- never-raise refresh
