@@ -470,3 +470,136 @@ local bare repo per project under `tmp_path`; `test_no_replay_targets_a_real_rem
 fails if any origin names `github.com`. No Discord, Drive or network call
 anywhere. `generate_dashboard.py` is deliberately not copied into the sandbox,
 so `update_plant`'s dashboard subprocess is a harmless, already-unchecked no-op.
+
+## Task 2.5 — project routing became DATA, in a new local-only `breeding-meta` repo
+
+### The plan described a `_CROSS_DIRS` dict that never existed
+
+Task 2.5's brief was "replace the hardcoded `_CROSS_DIRS` dict in
+`breeding_core.py` with a read of `registry.json`". Reading the actual file
+first: there is no `_CROSS_DIRS` dict, and there never was. `breeding_core.py`
+knew *nothing* about which projects exist — every one of the six
+`monitor_breeding_notes.py` wrappers hand-built its own complete `CONFIG` dict
+and passed it in.
+
+So the coupling the task exists to fix is real, but it was **distributed across
+the six wrappers** rather than centralized in one dict. The consequence is the
+same one the plan cared about: adding a seventh cross required authoring a
+seventh wrapper — a code change. We implemented the smallest mechanism that
+actually removes *that* coupling rather than inventing a `_CROSS_DIRS` dict
+just so we could delete it.
+
+### `breeding-meta` is local-only, with no GitHub remote
+
+Created at `~/.hermes/breeding/_shared/breeding-meta/` as a plain local git
+repo (`git init`, one commit, **no `origin`**), matching how `monitor-core` and
+`breeding-markdown` were created.
+
+Deliberately not a real GitHub repo: creating one is an account-level action
+with a blast radius outside this refactor (visibility, org placement, branch
+protection, whether the ingestion credential is scoped to reach it). None of
+that is needed to satisfy Task 2.5 — the acceptance criterion is about routing
+coming from data instead of code, which a local clone proves exactly as well.
+Adding an `origin` later is a one-line `git remote add`; `refresh_meta_repo()`
+already handles both shapes with no code change, and the no-remote case is a
+silent no-op rather than a warning precisely because local-only is a *valid*
+configuration today, not a degraded one.
+
+The plan's "use the existing ingestion credential, a private git clone, not an
+HTTP call to the gated API" is therefore satisfied by construction: the read is
+a filesystem read of a git checkout. No new auth exception is needed for a
+headless script, which was the point of that clause.
+
+### `refresh_meta_repo()` never raises — a stale registry beats a dead bot
+
+`load_registry(pull=True)` `git pull --ff-only`s the checkout before each
+ingestion run so a newly added project routes on the very next message. That
+pull inherits Task 2.3's never-raise rule verbatim (`_git` + `_warn`), and the
+reasoning is even stronger here than for pushes: **a stale registry still
+routes every existing project correctly.** Losing a live observation because
+GitHub was briefly unreachable is strictly worse than routing off a checkout
+that is a few minutes old. A failed pull emits `WARN: git pull failed ...` on
+stderr and ingestion proceeds on last-known-good data.
+
+`--ff-only` is intentional: the consumer clone is read-only in practice, so a
+divergence means something is wrong locally, and a merge commit created inside
+a Discord handler would be worse than a warning.
+
+Three cases are silent no-ops rather than warnings — no checkout, a non-git
+directory, no `origin` — because each is a legitimate local/sandbox setup. A
+non-zero `git remote` *is* warned about, since that means the git binary itself
+could not run.
+
+### Reading the registry FAILS LOUD, unlike pulling it
+
+Asymmetric on purpose. A failed refresh is recoverable (old data still works);
+a malformed `registry.json` is not — routing on a half-parsed registry sends
+observations to the wrong cross or nowhere at all. So `load_registry()` raises
+`FileNotFoundError` (naming `BREEDING_META_DIR`, following Task 2.1's
+`BREEDING_MARKDOWN_DIR` error-message precedent) and `ValueError` on bad JSON,
+an unsupported `schema_version`, a missing `slug`, a project with no prefixes,
+or a **prefix claimed by two projects**. That last check is the one that earns
+its keep: a duplicated prefix is silent data corruption, not an error anyone
+would notice.
+
+Same fail-loud-on-corruption call already made for plant markdown in
+`load_tracker` (Task 2.1).
+
+### What the registry stores, and what it derives — the flagged judgment call
+
+The task flagged this as a genuine ambiguity. Resolved by reading what
+`update_plant`/`process_message`/`push_to_github` actually *require* per
+project and storing exactly that, minus anything derivable:
+
+Stored: `slug`, `cross_name`, `breeding_dir`, `github_repo`, `auto_create`,
+`plant_id_prefixes` (a list of `{prefix, pattern}`).
+
+Derived, never stored:
+
+* **`TRACKER_FILE`** — always `BREEDING_DIR / 'tracker.json'` in all six
+  wrappers. Storing it invites drift with zero benefit.
+* **`DISABLE_GITHUB_PUSH`** — read from `BREEDING_DISABLE_PUSH`, as every
+  wrapper does. It is a per-run operational switch (and the test sandbox's
+  safety catch), not a property of a project. Putting it in the registry would
+  make a *data* commit able to silence pushes globally.
+* **single vs multi prefix** — one prefix yields
+  `PLANT_ID_PATTERN`/`PLANT_ID_PREFIX`; two or more yield `PLANT_ID_REGISTRY`
+  (Kibungan's `PK` + `PL`). One uniform representation in the data, with the
+  existing two-shaped config produced on demand, so `process_message` needs no
+  change and nothing downstream can distinguish a registry-built config from a
+  wrapper-built one.
+
+`GITHUB_REPO` *is* stored: it is genuinely per-project and already a required
+config key, even though Task 2.3 reduced it to signature-compatibility baggage
+(pushes now go to each repo's own `origin`).
+
+`test_registry_config_matches_the_wrappers_hardcoded_config` asserts the
+registry-derived config equals the real wrapper's `CONFIG` field-for-field for
+all six projects — the guard against `registry.json` being a plausible-looking
+parallel invention that has quietly drifted from reality.
+
+### Templates are NOT duplicated here
+
+`breeding-markdown` owns `templates/plant-template.md` and
+`templates/project-template.md` (Phase 1, approved). `breeding-meta` holds only
+`registry.json` and a README. Copying the templates would create a second
+canonical source and guarantee divergence.
+
+### The six live wrappers were NOT migrated
+
+Out of scope, and left deliberately untouched: all six are still byte-identical
+(pinned by SHA-256 in both `test_wrapper_compatibility.py` and
+`test_task_2_5_did_not_touch_any_real_wrapper`) and still route off their own
+`CONFIG` dicts. `registry.json` describes them accurately and `route_message()`
+routes them correctly, but nothing in production consumes it yet — this task
+builds and *proves* the mechanism; adopting it is a later task.
+
+The acceptance criterion is consequently proven with a fictional **seventh**
+project rather than a real one, exactly as the task specified: a sandbox
+authoring clone adds `zephyr-quartz` to `registry.json` and pushes it to a
+throwaway local bare remote; the consumer clone (still stale — asserted) then
+routes `"ZQ 12 top keeper, vigor 9"` to it, with `breeding_core.py`'s SHA-256
+asserted identical before and after. A second test feeds that registry-derived
+config straight into `process_message` and confirms it creates and persists
+`plants/ZQ12.md` with `status: top_keeper` — proving the config is genuinely
+usable, not just a lookup that returns a plausible dict.

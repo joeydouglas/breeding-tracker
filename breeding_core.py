@@ -17,6 +17,7 @@ behavior here so every project picks it up automatically.
 """
 
 import base64
+import json
 import os
 import re
 import subprocess
@@ -423,6 +424,264 @@ def extract_plant_ids_registry(message_text, registry):
             if plant_id not in plant_ids:
                 plant_ids.append(plant_id)
     return plant_ids
+
+
+# ---------------------------------------------------------------------------
+# PROJECT ROUTING REGISTRY (Phase 2 / Task 2.5)
+#
+# Which projects exist, and which plant-ID prefix belongs to which, used to be
+# knowledge encoded in CODE: each of the six per-project
+# `monitor_breeding_notes.py` wrappers hardcoded its own full CONFIG dict, so
+# a seventh cross meant authoring a seventh wrapper. (The finalized plan
+# described this as a hardcoded `_CROSS_DIRS` dict in this file; no such dict
+# ever existed here -- the hardcoding was distributed across the wrappers
+# instead. Same coupling, different shape. See DECISIONS.md.)
+#
+# That routing table is now DATA: `registry.json` in the `breeding-meta` git
+# repo. Adding a project to it -- and pushing -- routes that project's prefix
+# with no code change here, which is Task 2.5's acceptance criterion and is
+# proven literally by tests/test_registry_routing.py.
+#
+# The six live wrappers are deliberately NOT migrated onto this yet; they keep
+# working byte-identically off their own CONFIG dicts. Migration is a later
+# task.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_META_REPO = Path(__file__).resolve().parent.parent / "breeding-meta"
+
+REGISTRY_FILENAME = "registry.json"
+SUPPORTED_REGISTRY_SCHEMA = 1
+
+
+def _meta_repo():
+    """Locate the breeding-meta checkout.
+
+    Defaults to the sibling checkout next to ``monitor-core`` (the layout in
+    ``~/.hermes/breeding/_shared/``); ``BREEDING_META_DIR`` overrides it so a
+    sandbox or a container can point elsewhere without a code change. Same
+    precedent as ``markdown_backend``'s ``BREEDING_MARKDOWN_DIR`` (Task 2.1).
+    """
+    override = os.environ.get("BREEDING_META_DIR")
+    return Path(override).expanduser() if override else _DEFAULT_META_REPO
+
+
+def refresh_meta_repo():
+    """``git pull`` the breeding-meta checkout. NEVER RAISES.
+
+    Called before each ingestion run so a project added to ``registry.json``
+    elsewhere is picked up without restarting the bot.
+
+    This runs inside the Discord message handler, so the never-raise rule from
+    ``push_to_github`` (Task 2.3) applies with full force: a registry that is
+    merely STALE still routes every existing project correctly, so a failed
+    pull must degrade to a ``WARN:`` line on stderr and let ingestion proceed
+    off the last-known-good checkout. Losing an observation because GitHub was
+    briefly unreachable would be strictly worse than routing on a registry
+    that is a few minutes old.
+
+    A missing checkout, a non-git directory, and a repo with no ``origin`` are
+    all silent no-ops rather than warnings -- those are valid local
+    configurations (the repo is local-only today), not failures.
+    """
+    repo = _meta_repo()
+    if not (repo / '.git').exists():
+        return
+
+    remotes = _git(['remote'], repo)
+    if remotes.returncode != 0:
+        # git itself could not be run (missing binary, EACCES, ENOMEM). That
+        # is a real fault worth surfacing, unlike the benign no-remote case
+        # below -- but still not worth killing the ingestion reply over.
+        _warn('pull', repo, remotes)
+        return
+    if 'origin' not in remotes.stdout.split():
+        return
+
+    pulled = _git(['pull', '--ff-only', '-q'], repo)
+    if pulled.returncode != 0:
+        _warn('pull', repo, pulled)
+
+
+def _compile_prefixes(entry):
+    """``[{prefix, pattern}, ...]`` -> ``[(prefix, compiled), ...]``."""
+    compiled = []
+    for spec in entry.get('plant_id_prefixes') or []:
+        try:
+            compiled.append((spec['prefix'], re.compile(spec['pattern'])))
+        except KeyError as exc:
+            raise ValueError(
+                f"{REGISTRY_FILENAME}: project {entry.get('slug')!r} has a "
+                f"plant_id_prefixes entry missing {exc}"
+            ) from exc
+        except re.error as exc:
+            raise ValueError(
+                f"{REGISTRY_FILENAME}: project {entry.get('slug')!r} prefix "
+                f"{spec.get('prefix')!r} has an invalid pattern: {exc}"
+            ) from exc
+    if not compiled:
+        raise ValueError(
+            f"{REGISTRY_FILENAME}: project {entry.get('slug')!r} declares no "
+            "plant_id_prefixes, so no message could ever route to it"
+        )
+    return compiled
+
+
+def _validate_registry(data, path):
+    """Reject a registry that would route messages to the wrong project.
+
+    Fails loud rather than fail-open, the same call this codebase made for
+    corrupt plant markdown (see ``load_tracker``): silently dropping a
+    malformed project would send its observations nowhere, and a duplicated
+    prefix would send them to the WRONG cross -- both worse than an error.
+    """
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: {REGISTRY_FILENAME} must contain a JSON object")
+
+    version = data.get('schema_version')
+    if version != SUPPORTED_REGISTRY_SCHEMA:
+        raise ValueError(
+            f"{path}: {REGISTRY_FILENAME} schema_version {version!r} is not "
+            f"supported (this code understands {SUPPORTED_REGISTRY_SCHEMA})"
+        )
+
+    projects = data.get('projects')
+    if not isinstance(projects, list):
+        raise ValueError(f"{path}: {REGISTRY_FILENAME} 'projects' must be a list")
+
+    seen_slugs = set()
+    seen_prefixes = {}
+    for entry in projects:
+        slug = entry.get('slug')
+        if not slug:
+            raise ValueError(f"{path}: a project entry has no 'slug'")
+        if slug in seen_slugs:
+            raise ValueError(f"{path}: duplicate project slug {slug!r}")
+        seen_slugs.add(slug)
+
+        for prefix, _ in _compile_prefixes(entry):
+            if prefix in seen_prefixes:
+                raise ValueError(
+                    f"{path}: prefix {prefix!r} is claimed by both "
+                    f"{seen_prefixes[prefix]!r} and {slug!r} -- a message "
+                    "using it would route ambiguously"
+                )
+            seen_prefixes[prefix] = slug
+
+    return data
+
+
+def load_registry(pull=False):
+    """Read ``registry.json`` from the breeding-meta checkout.
+
+    ``pull=True`` refreshes the checkout first (best-effort, never fatal).
+    Raises ``FileNotFoundError`` when the checkout is absent and ``ValueError``
+    when the registry is malformed -- routing on a half-understood registry is
+    not safe.
+    """
+    if pull:
+        refresh_meta_repo()
+
+    path = _meta_repo() / REGISTRY_FILENAME
+    try:
+        raw = path.read_text(encoding='utf-8')
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"no {REGISTRY_FILENAME} at {path}. Set the BREEDING_META_DIR "
+            "environment variable to the breeding-meta checkout if it does "
+            "not sit next to monitor-core."
+        ) from exc
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: {REGISTRY_FILENAME} is not valid JSON: {exc}") from exc
+
+    return _validate_registry(data, path)
+
+
+def registry_entry(slug, registry=None):
+    """One project's raw registry entry, by slug."""
+    registry = registry if registry is not None else load_registry()
+    for entry in registry['projects']:
+        if entry.get('slug') == slug:
+            return entry
+    raise KeyError(f"no project {slug!r} in {REGISTRY_FILENAME}")
+
+
+def config_for_project(entry):
+    """Build the per-project ingestion ``config`` dict from a registry entry.
+
+    Produces exactly the dict shape ``update_plant`` and ``process_message``
+    already document and the six wrappers already hand-build -- BREEDING_DIR,
+    TRACKER_FILE, GITHUB_REPO, DISABLE_GITHUB_PUSH, CROSS_NAME, AUTO_CREATE,
+    plus either PLANT_ID_PATTERN + PLANT_ID_PREFIX (one prefix) or
+    PLANT_ID_REGISTRY (two or more, as Kibungan's PK/PL). Nothing downstream
+    can tell a registry-built config from a wrapper-built one.
+
+    Two fields are DERIVED rather than stored, matching what every wrapper
+    does today and keeping the registry free of redundant, driftable state:
+    ``TRACKER_FILE`` is always ``BREEDING_DIR / 'tracker.json'``, and
+    ``DISABLE_GITHUB_PUSH`` comes from the ``BREEDING_DISABLE_PUSH``
+    environment variable -- it is a per-run operational switch (and the
+    sandbox's safety catch), not a property of the project.
+    """
+    breeding_dir = Path(entry['breeding_dir']).expanduser()
+
+    config = {
+        'BREEDING_DIR': breeding_dir,
+        'TRACKER_FILE': breeding_dir / 'tracker.json',
+        'GITHUB_REPO': entry.get('github_repo'),
+        'DISABLE_GITHUB_PUSH': os.environ.get('BREEDING_DISABLE_PUSH') == '1',
+        'CROSS_NAME': entry.get('cross_name', entry['slug']),
+        'AUTO_CREATE': bool(entry.get('auto_create')),
+    }
+
+    compiled = _compile_prefixes(entry)
+    if len(compiled) == 1:
+        prefix, pattern = entry['plant_id_prefixes'][0]['prefix'], \
+                          entry['plant_id_prefixes'][0]['pattern']
+        config['PLANT_ID_PATTERN'] = pattern
+        config['PLANT_ID_PREFIX'] = prefix
+    else:
+        config['PLANT_ID_REGISTRY'] = compiled
+
+    return config
+
+
+def route_message(message_text, pull=True, registry=None):
+    """Find every registry project whose prefixes appear in ``message_text``.
+
+    Returns a list of ``{'slug', 'entry', 'config', 'plant_ids'}`` dicts, one
+    per matching project, in registry order; ``[]`` when nothing matches.
+    ``pull`` refreshes the breeding-meta checkout first so a newly added
+    project routes on the very next message.
+
+    This is the prefix -> project lookup that used to be implicit in "which
+    wrapper did the gateway happen to load". A caller feeds the returned
+    ``config`` straight to ``process_message``.
+    """
+    registry = registry if registry is not None else load_registry(pull=pull)
+
+    routed = []
+    for entry in registry['projects']:
+        compiled = _compile_prefixes(entry)
+        if len(compiled) == 1:
+            spec = entry['plant_id_prefixes'][0]
+            plant_ids = extract_plant_ids_single(
+                message_text, spec['pattern'], spec['prefix']
+            )
+        else:
+            plant_ids = extract_plant_ids_registry(message_text, compiled)
+
+        if plant_ids:
+            routed.append({
+                'slug': entry['slug'],
+                'entry': entry,
+                'config': config_for_project(entry),
+                'plant_ids': sorted(set(plant_ids)),
+            })
+
+    return routed
 
 
 def process_message(message_text, config, attachments=None):
