@@ -32,10 +32,15 @@ Shape-preservation rules (why this module is more than two one-liners):
   plant dict saved WITHOUT ``observation_log`` loads back WITH
   ``observation_log: ''``. Restricting it away here would contradict the
   Phase 1 contract and make the round-trip asymmetric, so it is deliberately
-  exempted from the restrict-to-present rule (``_ALWAYS_PRESENT_PLANT_KEYS``).
-  All six real projects' plants already carry the field, so no real record is
-  affected; only a synthetic ``{id, status, vigor}`` plant sees the addition.
-  Regression-tested in ``test_tracker_persistence.py``.
+  exempted from the restrict-to-present rule via
+  ``_ALWAYS_PRESENT_PLANT_KEYS``, which ``_restrict_to_present`` consults
+  directly. That exemption is enforced HERE rather than merely inherited
+  from Phase 1: if ``read_plant`` ever stopped adding the body key to its
+  schema-less output, this module would otherwise start silently dropping
+  every plant's observation log. All six real projects' plants already carry
+  the field, so no real record is affected; only a synthetic
+  ``{id, status, vigor}`` plant sees the addition. Regression-tested in
+  ``test_tracker_persistence.py`` and ``test_review_round1_fixes.py``.
 * **Plant order.** A JSON ``plants`` list is ordered and at least one real
   project (spaced-paste) is not in ID order, so order is caller-visible
   state. It is recorded in ``project.md``'s ``plant_order`` frontmatter key
@@ -51,6 +56,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 _DEFAULT_MARKDOWN_REPO = Path(__file__).resolve().parents[1] / "breeding-markdown"
@@ -70,11 +76,21 @@ def _markdown_repo() -> Path:
 
 def _import_markdown_modules():
     repo = _markdown_repo()
-    src = str(repo / "src")
-    if src not in sys.path:
-        sys.path.insert(0, src)
-    import plant_markdown
-    import project_markdown
+    src = repo / "src"
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    try:
+        import plant_markdown
+        import project_markdown
+    except ModuleNotFoundError as exc:
+        # A bare "No module named 'plant_markdown'" tells an operator nothing
+        # about where this looked or how to redirect it. Name both.
+        raise ModuleNotFoundError(
+            f"could not import the Phase 1 breeding-markdown modules from "
+            f"{src} (repo root {repo}). Set the BREEDING_MARKDOWN_DIR "
+            "environment variable to the breeding-markdown checkout if it "
+            f"does not sit next to monitor-core. Original error: {exc}"
+        ) from exc
 
     return project_markdown, plant_markdown
 
@@ -86,9 +102,10 @@ ORDER_KEY = "plant_order"
 
 # Keys ``plant_markdown`` guarantees on every read regardless of what the
 # file held (see the module docstring's "Exact key set" note). Restricting
-# these away would break Phase 1's read_plant(write_plant(x)) symmetry.
+# these away would break Phase 1's read_plant(write_plant(x)) symmetry, so
+# ``_restrict_to_present`` always keeps them -- enforced locally rather than
+# relying on Phase 1 continuing to add them for us.
 _ALWAYS_PRESENT_PLANT_KEYS = frozenset({"observation_log"})
-
 
 
 # ------------------------------------------------------------- schemas ----
@@ -111,13 +128,23 @@ def _schemas():
 def _validate_plant_id(value):
     """Plant IDs reach this layer from Discord message text via a regex and
     become filenames, so an id that escapes ``plants/`` must be refused
-    loudly rather than silently writing outside the project."""
+    loudly rather than silently writing outside the project.
+
+    Scope note: this rejects path separators, NUL, and the relative-directory
+    names ``'.'``/``'..'``. It deliberately does NOT check Windows reserved
+    device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) -- this deployment is
+    Linux-only and those are legal filenames here, so the error message names
+    exactly what is enforced rather than implying broader coverage.
+    """
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"plant record has a missing or non-string id: {value!r}")
     if value != value.strip():
         raise ValueError(f"plant id has leading/trailing whitespace: {value!r}")
     if value in (".", "..") or "/" in value or "\\" in value or "\0" in value:
-        raise ValueError(f"unsafe plant id (path separator or reserved name): {value!r}")
+        raise ValueError(
+            "unsafe plant id (path separator, NUL, or the relative-directory "
+            f"names '.' / '..'): {value!r}"
+        )
     if Path(value).name != value or Path(value).is_absolute():
         raise ValueError(f"unsafe plant id (not a bare filename): {value!r}")
     return value
@@ -133,8 +160,18 @@ def _project_dir(tracker_file) -> Path:
 # ----------------------------------------------------------------- read ----
 
 
-def _restrict_to_present(typed: dict, present_keys) -> dict:
-    return {k: v for k, v in typed.items() if k in present_keys}
+def _restrict_to_present(typed: dict, present_keys, always_keep=frozenset()) -> dict:
+    """Keep only the keys the file really held, plus any ``always_keep`` key.
+
+    ``always_keep`` exists so this module enforces the ``observation_log``
+    guarantee itself (see ``_ALWAYS_PRESENT_PLANT_KEYS``) rather than relying
+    on Phase 1's ``read_plant`` continuing to inject the body key into its
+    schema-less output. If that ever changed, the schema-typed read still
+    carries the body, and this keeps it.
+    """
+    return {
+        k: v for k, v in typed.items() if k in present_keys or k in always_keep
+    }
 
 
 def load_tracker(tracker_file) -> dict:
@@ -142,6 +179,20 @@ def load_tracker(tracker_file) -> dict:
 
     Raises ``FileNotFoundError`` (exactly as the JSON ``open()`` did) when the
     project has no ``project.md``.
+
+    FAIL-LOUD ON CORRUPTION (deliberate policy). A single unparseable file --
+    ``project.md`` or ANY ONE ``plants/<ID>.md`` -- makes this whole call
+    raise Phase 1's ``MalformedFrontmatterError`` / ``UnsafeYamlError``. There
+    is no per-plant isolation and no skip-and-warn. Since ``plants/<ID>.md``
+    is now the record of truth, a skipped plant would be ABSENT from the
+    returned roster, and ``save_tracker``'s whole-roster rewrite semantics
+    would then DELETE its file on the very next observation -- turning one
+    recoverable parse error into permanent data loss. Refusing to serve a
+    partial roster is the safe failure. This matches the precedent set
+    elsewhere in the refactor for the record of truth (as opposed to
+    ``migration.py``, which isolates per-repo failures because each repo
+    there is an independent, retryable unit of work with no cross-repo
+    delete semantics).
     """
     project_markdown, plant_markdown, project_schema, plant_schema = _schemas()
 
@@ -173,7 +224,11 @@ def load_tracker(tracker_file) -> dict:
         path = on_disk[plant_id]
         plant_present = set(plant_markdown.read_plant(path))
         plant_typed = plant_markdown.read_plant(path, schema=plant_schema)
-        plants.append(_restrict_to_present(plant_typed, plant_present))
+        plants.append(
+            _restrict_to_present(
+                plant_typed, plant_present, _ALWAYS_PRESENT_PLANT_KEYS
+            )
+        )
 
     tracker[PLANTS_KEY] = plants
     return tracker
@@ -202,7 +257,11 @@ def save_plant(plant, project_dir) -> None:
     if path.exists():
         existing_present = set(plant_markdown.read_plant(path))
         existing_typed = plant_markdown.read_plant(path, schema=plant_schema)
-        merged.update(_restrict_to_present(existing_typed, existing_present))
+        merged.update(
+            _restrict_to_present(
+                existing_typed, existing_present, _ALWAYS_PRESENT_PLANT_KEYS
+            )
+        )
     merged.update(plant)
 
     plant_markdown.write_plant(path, merged, schema=plant_schema)
@@ -212,6 +271,28 @@ def save_tracker(tracker, tracker_file) -> None:
     """Markdown-backed replacement for the JSON ``save_tracker``.
 
     The caller's dict is never mutated. Returns ``None``, as before.
+
+    WRITE ORDERING / ATOMICITY. ``json.dump`` wrote one file, so a failed save
+    could not half-apply a roster. This backend writes ``project.md`` plus one
+    file per plant, so the roster is staged in two passes before any real file
+    is touched:
+
+    1. **Validation pass** -- every plant's id is checked (type, whitespace,
+       path-safety, duplicates) with nothing written.
+    2. **Render pass** -- ``project.md`` and every plant file are rendered in
+       full into a scratch directory inside the project dir. This is what
+       catches a value-level failure (an unserialisable field value, a
+       non-string ``observation_log``) that only surfaces once a specific
+       plant is actually rendered. Previously such a failure on plant #3 of 4
+       left plants #1-#2 rewritten and ``project.md`` already carrying the
+       new ``plant_order``.
+
+    Only once BOTH passes succeed for the whole roster does anything get
+    written to the real paths. The individual writes are each atomic via
+    Phase 1's ``mkstemp`` + ``os.replace``; the roster as a whole is still not
+    one filesystem transaction (a mid-sequence ``ENOSPC``/crash can leave some
+    files updated), but every failure this code can raise on its own is now
+    raised before the first real byte is written.
     """
     if not isinstance(tracker, dict):
         raise TypeError(f"tracker must be a dict, got {type(tracker).__name__}")
@@ -223,8 +304,7 @@ def save_tracker(tracker, tracker_file) -> None:
     if not isinstance(plants, list):
         raise TypeError(f"tracker['plants'] must be a list, got {type(plants).__name__}")
 
-    # Validate the whole roster BEFORE writing anything: a bad id halfway
-    # through must not leave a half-written project on disk.
+    # Pass 1 -- validate the whole roster before writing anything.
     order = []
     for plant in plants:
         if not isinstance(plant, dict):
@@ -238,14 +318,34 @@ def save_tracker(tracker, tracker_file) -> None:
     project_fields[ORDER_KEY] = order
 
     directory.mkdir(parents=True, exist_ok=True)
+    plants_dir = directory / PLANTS_DIR
+
+    # Pass 2 -- render everything into a scratch dir. A render failure on any
+    # plant aborts here, with every real file still untouched. The scratch
+    # dir lives inside the project dir so it is on the same filesystem and is
+    # swept up by the same backup/ignore rules as the rest of the project.
+    with tempfile.TemporaryDirectory(
+        dir=str(directory), prefix=".save_tracker-staging-"
+    ) as staging:
+        staging_dir = Path(staging)
+        project_markdown.write_project(
+            staging_dir / PROJECT_FILE, project_fields, schema=project_schema
+        )
+        for plant, plant_id in zip(plants, order):
+            plant_markdown.write_plant(
+                staging_dir / PLANTS_DIR / f"{plant_id}.md", plant, schema=plant_schema
+            )
+
+    # Both passes succeeded: now write for real. Re-rendering through
+    # write_plant/write_project (rather than moving the staged files) keeps
+    # Phase 1's own atomic-replace and existing-file-mode handling intact --
+    # moving a scratch file into place would reset a git-tracked file's mode.
     project_markdown.write_project(
         directory / PROJECT_FILE, project_fields, schema=project_schema
     )
-
-    plants_dir = directory / PLANTS_DIR
-    for plant in plants:
+    for plant, plant_id in zip(plants, order):
         plant_markdown.write_plant(
-            plants_dir / f"{plant['id']}.md", plant, schema=plant_schema
+            plants_dir / f"{plant_id}.md", plant, schema=plant_schema
         )
 
     # Whole-roster rewrite semantics: drop files for plants no longer listed.

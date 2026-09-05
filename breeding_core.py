@@ -37,6 +37,16 @@ def load_tracker(tracker_file):
     so every per-project `monitor_breeding_notes.py` wrapper keeps calling
     `core.load_tracker(TRACKER_FILE)` with no edit at all. `tracker_file`
     itself is no longer read; only its parent directory is used.
+
+    Raises `FileNotFoundError` when the project has not been migrated (no
+    `project.md`), matching the JSON era's `open()`.
+
+    FAILS LOUD ON CORRUPTION: a single malformed `plants/<ID>.md` (or
+    `project.md`) makes this ENTIRE call raise -- there is no per-plant
+    isolation, and no plant is silently skipped. See
+    `markdown_backend.load_tracker` for why serving a partial roster would be
+    unsafe (`save_tracker` would delete the skipped plant's file on the next
+    observation).
     """
     return markdown_backend.load_tracker(tracker_file)
 
@@ -132,7 +142,12 @@ def update_plant(plant_id, observation, config, photo_count=0):
 
     plant = None
     for p in tracker['plants']:
-        if p['id'] == plant_id:
+        # p.get('id'), not p['id']: a hand-edited/corrupted plant file with no
+        # id would otherwise raise an opaque KeyError('id') here, pre-empting
+        # save_tracker's own informative "plant record has a missing or
+        # non-string id" ValueError. Degrade gracefully so the useful error
+        # is the one that surfaces.
+        if p.get('id') == plant_id:
             plant = p
             break
 
