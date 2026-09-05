@@ -89,6 +89,18 @@ def _remote_head_sha(remote):
     return result.stdout.strip()
 
 
+def _raw_porcelain(local):
+    """Porcelain output with its fixed-width columns intact (no strip)."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain", "-uall"],
+        cwd=str(local),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
+
+
 def _clone_and_read(remote, dest):
     _git(["clone", "-q", "--branch", "main", str(remote), str(dest)], dest.parent)
     return (dest / "project.md").read_text(encoding="utf-8")
@@ -640,15 +652,28 @@ class TestCommitStrandingIsDetected:
 
         # Simulate the retry seeing an already-template-matching file while
         # the edits remain uncommitted: hand-apply the fields and leave them
-        # dirty, then run with commit still broken.
+        # dirty, then run with commit STILL broken. The rollback from the
+        # first run cleaned the tree, so re-strand it by hand.
+        apply_new_fields(PROJECT_TEMPLATE, local / "project.md")
+        assert _porcelain(local) != "", "test setup must leave the tree dirty"
+
         report = run_migration_across_repos(
             PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
         )
-        if report.repos["dirtyskip"]["status"] == "success":
-            assert _porcelain(local) == "", (
-                "recorded success while migration-managed paths were still "
-                "dirty in the working tree"
-            )
+
+        # The original assertion was dead code: it hung off
+        # `if status == "success"`, which never fires because the run
+        # correctly fails. Assert the real contract in both directions --
+        # this run must NOT be recorded as success (commit is still broken),
+        # and success would only ever be legal with a clean tree.
+        status = report.repos["dirtyskip"]["status"]
+        assert status == "failed", (
+            "commit is still broken and the migration-managed paths are "
+            f"still dirty, so this run must not be recorded as {status!r}"
+        )
+        assert "uncommitted" in report.repos["dirtyskip"]["error"] or _porcelain(
+            local
+        ), "the failure must be about the still-uncommitted managed paths"
 
 
 class TestFailurePathsAreIsolatedToOneRepo:
@@ -849,3 +874,104 @@ class TestFailureRollsBackAndReportsTouchedPaths:
 
         persisted = json.loads(state.read_text(encoding="utf-8"))
         assert persisted["repos"]["touched"]["added_fields"] == touched
+
+
+# ------------- code-quality review round 4: porcelain column parsing ------
+
+
+class TestPorcelainStatusParsing:
+    """Review finding (Critical): the commit-stranding recovery path parsed
+    `git status --porcelain` output after `.strip()`-ing it. Porcelain uses a
+    fixed-width 2-char XY status column plus a space before the path, so an
+    UNSTAGED entry (' M project.md') loses its leading space to strip() and
+    the subsequent line[3:] slice eats the first character of the filename
+    ('roject.md'). The recovery then runs `git add -- roject.md`, which
+    fails, so a repo stranded by an unstaged failure could never
+    self-recover: it failed on every retry, forever. Only the STAGED shape
+    ('M  path'), which strip() does not corrupt, was covered before."""
+
+    def test_dirty_paths_parses_staged_unstaged_and_untracked_shapes(self):
+        import migration as migration_module
+
+        porcelain = "M  staged.md\n M unstaged.md\n?? plants/untracked.md\n"
+        assert migration_module._dirty_paths(porcelain) == [
+            "plants/untracked.md",
+            "staged.md",
+            "unstaged.md",
+        ]
+
+    def test_unstaged_stranded_edits_are_recovered_committed_and_pushed(
+        self, tmp_path
+    ):
+        """The real-world shape: `git add` (or the index) failed, so a
+        previous run's rewritten files sit as UNSTAGED modifications."""
+        local, remote = _init_repo_with_remote(
+            tmp_path,
+            "unstagedstrand",
+            "cross_name: UnstagedStrand\n",
+            plant_files=[("Us01.md", "id: Us01\n")],
+        )
+        state = tmp_path / "state.json"
+        registry = [{"name": "unstagedstrand", "path": str(local)}]
+
+        # Strand the repo exactly as a failed `git add` would: the template
+        # fields are applied on disk but nothing is staged or committed.
+        apply_new_fields(PROJECT_TEMPLATE, local / "project.md")
+        apply_new_fields(PLANT_TEMPLATE, local / "plants" / "Us01.md")
+        assert " M project.md" in _raw_porcelain(local), (
+            "test setup must produce the UNSTAGED porcelain shape"
+        )
+
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["unstagedstrand"]["status"] == "success", (
+            "a repo stranded with UNSTAGED edits must recover on the next "
+            "run, not fail forever on a corrupted filename"
+        )
+        assert _porcelain(local) == ""
+        content = _clone_and_read(remote, tmp_path / "verify-unstaged-clone")
+        assert "auto_create: false" in content
+
+    def test_untracked_managed_file_is_recovered_committed_and_pushed(
+        self, tmp_path
+    ):
+        """The '?? path' shape: a managed plant file that was written but
+        never added at all."""
+        local, remote = _init_repo_with_remote(
+            tmp_path, "untrackedstrand", "cross_name: UntrackedStrand\n"
+        )
+        state = tmp_path / "state.json"
+        registry = [{"name": "untrackedstrand", "path": str(local)}]
+
+        # project.md is already migrated and committed, so this run has no
+        # field changes of its own -- the untracked managed plant file is
+        # the only thing standing between it and a bogus "success".
+        apply_new_fields(PROJECT_TEMPLATE, local / "project.md")
+        _git(["add", "-A"], local)
+        _git(["commit", "-q", "-m", "pre-migrate project"], local)
+        _git(["push", "-q", "origin", "HEAD:refs/heads/main"], local)
+
+        (local / "plants").mkdir()
+        new_plant = local / "plants" / "Ut01.md"
+        new_plant.write_text("---\nid: Ut01\n---\n", encoding="utf-8")
+        apply_new_fields(PLANT_TEMPLATE, new_plant)
+        assert "?? plants/Ut01.md" in _raw_porcelain(local)
+
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["untrackedstrand"]["status"] == "success", (
+            report.repos["untrackedstrand"].get("error")
+        )
+
+        assert _porcelain(local) == ""
+        _git(
+            ["clone", "-q", "--branch", "main", str(remote), str(tmp_path / "vc2")],
+            tmp_path,
+        )
+        assert (tmp_path / "vc2" / "plants" / "Ut01.md").exists(), (
+            "the recovered untracked managed file never reached the remote"
+        )

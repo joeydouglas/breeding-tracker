@@ -350,3 +350,54 @@ and `import copy` sitting inside `_default_for` instead of at module scope.
 Final state: 284 tests, 100% green, zero warnings (`pytest -W error`),
 re-run independently after each commit rather than trusted from any
 subagent's self-report.
+
+## Task 1.3 code-quality review round 4 findings (2026-09-05)
+
+### Critical: porcelain column parsing corrupted unstaged filenames
+
+The commit-stranding recovery path added in round 3 could never recover a
+repo stranded by an UNSTAGED failure -- it failed on every retry, forever.
+
+`_porcelain_status()` returned `result.stdout.strip()`, and the recovery
+then sliced each line at the fixed column `line[3:]`. Porcelain v1 is a
+fixed-width format: two status characters (XY), a space, then the path. A
+staged entry is `"M  project.md"`, but an UNSTAGED entry is
+`" M project.md"` -- with a leading space that is part of the format, not
+padding. `.strip()` ate that space, shifting every column left by one, so
+`line[3:]` sliced the first character off the filename: `project.md`
+parsed as `roject.md`. The recovery then ran `git add -- roject.md`, which
+fails (no such file), so the run failed; and because the failure is
+deterministic, every subsequent retry failed identically. Any repo
+stranded by a failing `git add`, a stale `index.lock`, or external dirt in
+the migration-managed paths was permanently unrecoverable.
+
+Fix: `_porcelain_status()` now returns the RAW stdout (documented as
+deliberately unstripped; the one human-facing error message strips it at
+the point of use), and path extraction moved into a new `_dirty_paths()`
+helper that splits on `\n`, strips only a trailing `\r`, skips blank
+lines, and takes `line[3:]` off the untouched line. It also handles the
+rename shape `"R  old -> new"` by taking the new path -- the only one that
+exists on disk to stage.
+
+Why it slipped past three review rounds: the only test covering the
+recovery path exercised the STAGED shape (`"M  path"`), which `.strip()`
+does not corrupt, so the bug was invisible. The new
+`TestPorcelainStatusParsing` covers all three shapes -- a direct unit test
+of `_dirty_paths` over staged/unstaged/untracked lines, plus two
+end-to-end tests that strand a real repo with unstaged edits and with an
+untracked managed file and assert the retry actually commits AND pushes
+the correctly-named file to the remote (not merely that the run fails).
+
+### Dead assertion in the companion stranding test
+
+`test_uncommitted_migration_edits_are_never_recorded_as_success` guarded
+its only assertion behind `if report.repos["dirtyskip"]["status"] ==
+"success"`, which never fires because the run correctly fails -- so the
+test asserted nothing and would have passed against almost any
+regression. It now re-strands the repo explicitly (the round-3 rollback
+cleans the tree, so the scenario has to be reconstructed), then asserts
+unconditionally that a run with a still-broken commit and dirty managed
+paths is recorded as `failed` and that the failure names the uncommitted
+paths.
+
+Final state: 287 tests, 100% green, zero warnings (`pytest -W error`).

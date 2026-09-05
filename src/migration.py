@@ -190,11 +190,42 @@ def _managed_paths(repo_path: Path) -> list[str]:
 
 
 def _porcelain_status(repo_path: Path, paths: Sequence[str]) -> str:
-    """``git status --porcelain`` restricted to ``paths`` (empty == clean)."""
+    """``git status --porcelain`` restricted to ``paths`` (empty == clean).
+
+    Returned VERBATIM -- deliberately not ``.strip()``ed. Porcelain v1 is a
+    fixed-width format: two status characters (XY) then a space then the
+    path, so an unstaged entry legitimately begins with a space
+    (``" M project.md"``). Stripping the output would eat that leading
+    space and shift every subsequent column, so :func:`_dirty_paths` would
+    slice the first character off the filename. Callers that want a tidy
+    string for a human-facing message strip it themselves.
+    """
     if not paths:
         return ""
     result = _git(["status", "--porcelain", "--", *paths], repo_path)
-    return result.stdout.strip()
+    return result.stdout
+
+
+def _dirty_paths(porcelain: str) -> list[str]:
+    """Repo-relative paths named by ``git status --porcelain`` output.
+
+    ``porcelain`` must be the RAW output (see :func:`_porcelain_status`).
+    The path starts at a fixed column 3, after the two XY status characters
+    and their separating space, for every shape: staged (``"M  path"``),
+    unstaged (``" M path"``) and untracked (``"?? path"``). Renames are
+    reported as ``"R  old -> new"``; only the new path exists on disk, so
+    that is the one to stage.
+    """
+    paths: set[str] = set()
+    for raw_line in porcelain.split("\n"):
+        line = raw_line.rstrip("\r")
+        if not line.strip():
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        paths.add(path.strip('"'))
+    return sorted(paths)
 
 
 def _rollback(repo_path: Path, paths: Sequence[str]) -> None:
@@ -311,9 +342,7 @@ def _migrate_one_repo_unguarded(
         if not added_fields:
             # Recover the stranded edits: commit exactly the managed paths
             # that are dirty, then fall through to the normal push check.
-            dirty_paths = sorted(
-                {line[3:].strip().strip('"') for line in dirty.splitlines()}
-            )
+            dirty_paths = _dirty_paths(dirty)
             for relative_path in dirty_paths:
                 _git(["add", "--", relative_path], repo_path)
             _git(
@@ -335,7 +364,7 @@ def _migrate_one_repo_unguarded(
             raise RuntimeError(
                 "migration-managed paths are still uncommitted after the "
                 f"commit step -- refusing to record this repo as migrated: "
-                f"{still_dirty}"
+                f"{still_dirty.strip()}"
             )
 
     if not _has_origin(repo_path):
