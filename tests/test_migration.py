@@ -12,6 +12,7 @@ Covers the plan's acceptance criteria:
       zero commits
 """
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -314,3 +315,240 @@ class TestRunMigrationAcrossRepos:
             PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
         )
         assert set(report.repos["lantz"]) >= {"status", "added_fields", "error"}
+
+
+# ------------------------------------------------- spec-compliance review ----
+
+
+def _remote_refs(remote):
+    result = subprocess.run(
+        ["git", "ls-remote", str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _local_head(local):
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(local),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _commit_files(local, rev="HEAD"):
+    result = subprocess.run(
+        ["git", "show", "--pretty=format:", "--name-only", rev],
+        cwd=str(local),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return sorted(f for f in result.stdout.split() if f)
+
+
+class TestPushIsActuallyVerifiedBeforeRecordingSuccess:
+    """Review finding (resumability): with a reachable local clone but an
+    unreachable REMOTE, run 1 correctly reports failed -- but
+    apply_new_fields has already been applied and COMMITTED locally before
+    the push failed. On retry with the remote restored, apply_new_fields
+    returns changed=False (the file already matches the template), so the
+    old code made no git call at all, never re-pushed, and still recorded
+    'success' at the current template version. The repo's migration commit
+    was silently stranded in the local clone forever."""
+
+    def test_retry_after_push_failure_actually_pushes_the_local_commit(
+        self, tmp_path
+    ):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "stranded", "cross_name: Stranded\n"
+        )
+        state = tmp_path / "state.json"
+        registry = [{"name": "stranded", "path": str(local)}]
+
+        # Run 1: remote unreachable (moved aside). The local field-apply and
+        # commit still happen; only the push fails.
+        moved = tmp_path / "stranded-remote-moved.git"
+        remote.rename(moved)
+        report1 = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+        assert report1.repos["stranded"]["status"] == "failed"
+
+        # Run 2: remote is reachable again. Even though the local file
+        # already matches the template, the commit must still get pushed.
+        moved.rename(remote)
+        report2 = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report2.repos["stranded"]["status"] == "success"
+        assert _local_head(local) in _remote_refs(remote), (
+            "the local migration commit was recorded as a success but never "
+            "actually reached the remote"
+        )
+        content = _clone_and_read(remote, tmp_path / "verify-clone")
+        assert "auto_create: false" in content
+
+    def test_unpushed_local_commit_is_not_recorded_as_success(self, tmp_path):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "nopush", "cross_name: NoPush\n"
+        )
+        state = tmp_path / "state.json"
+        registry = [{"name": "nopush", "path": str(local)}]
+
+        moved = tmp_path / "nopush-remote-moved.git"
+        remote.rename(moved)
+        run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        persisted = json.loads(state.read_text(encoding="utf-8"))
+        assert persisted["repos"]["nopush"]["status"] == "failed", (
+            "a repo whose commit never reached the remote must not be "
+            "persisted as migrated at the current template version"
+        )
+        moved.rename(remote)
+
+
+class TestCommitStagesOnlyMigratedFiles:
+    """Review finding: _migrate_one_repo committed with `git add -A`,
+    sweeping every unrelated dirty/untracked file in the working tree into
+    the migration commit."""
+
+    def test_unrelated_dirty_files_are_not_swept_into_the_commit(self, tmp_path):
+        local, remote = _init_repo_with_remote(
+            tmp_path,
+            "sweep",
+            "cross_name: Sweep\n",
+            plant_files=[("Sw01.md", "id: Sw01\n")],
+        )
+        # Unrelated junk in the working tree at migration time.
+        (local / "scratch.txt").write_text("untracked junk\n", encoding="utf-8")
+        (local / "notes.local").write_text("more junk\n", encoding="utf-8")
+
+        state = tmp_path / "state.json"
+        registry = [{"name": "sweep", "path": str(local)}]
+        run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        committed = _commit_files(local)
+        assert committed == ["plants/Sw01.md", "project.md"], (
+            f"migration commit must contain only migrated files, got {committed}"
+        )
+        assert (local / "scratch.txt").exists()
+
+    def test_unrelated_modified_tracked_file_is_not_committed(self, tmp_path):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "dirty", "cross_name: Dirty\n"
+        )
+        readme = local / "README.md"
+        readme.write_text("hand edit in progress\n", encoding="utf-8")
+        _git(["add", "README.md"], local)
+        _git(["commit", "-q", "-m", "add readme"], local)
+        readme.write_text("uncommitted work in progress\n", encoding="utf-8")
+
+        state = tmp_path / "state.json"
+        registry = [{"name": "dirty", "path": str(local)}]
+        run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert _commit_files(local) == ["project.md"]
+        assert (
+            readme.read_text(encoding="utf-8") == "uncommitted work in progress\n"
+        ), "the unrelated in-progress edit must remain uncommitted in the tree"
+
+
+class TestStateIsPersistedIncrementally:
+    """Review finding: _save_state was only called after the ENTIRE registry
+    loop finished, so a mid-run crash (Ctrl-C, OOM, machine reboot)
+    persisted nothing at all and a restart re-migrated every repo from
+    scratch -- including ones that had already succeeded and pushed."""
+
+    def test_crash_midway_still_persists_earlier_successes(
+        self, tmp_path, monkeypatch
+    ):
+        local_a, remote_a = _init_repo_with_remote(
+            tmp_path, "alpha", "cross_name: Alpha\n"
+        )
+        local_b, remote_b = _init_repo_with_remote(
+            tmp_path, "beta", "cross_name: Beta\n"
+        )
+        state = tmp_path / "state.json"
+        registry = [
+            {"name": "alpha", "path": str(local_a)},
+            {"name": "beta", "path": str(local_b)},
+        ]
+
+        import migration as migration_module
+
+        real = migration_module._migrate_one_repo
+
+        def crash_on_beta(project_template, plant_template, repo_path):
+            if Path(repo_path).name == "beta-local":
+                # A hard interrupt, not a normal Exception: the per-repo
+                # try/except deliberately does not catch this.
+                raise KeyboardInterrupt("simulated mid-run crash")
+            return real(project_template, plant_template, repo_path)
+
+        monkeypatch.setattr(migration_module, "_migrate_one_repo", crash_on_beta)
+
+        with pytest.raises(KeyboardInterrupt):
+            run_migration_across_repos(
+                PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+            )
+
+        assert state.exists(), "state must be persisted before the crash"
+        persisted = json.loads(state.read_text(encoding="utf-8"))
+        assert persisted["repos"]["alpha"]["status"] == "success", (
+            "alpha migrated and pushed successfully before the crash; a "
+            "restart must not re-migrate it from scratch"
+        )
+        assert "beta" not in persisted["repos"]
+
+    def test_restart_after_crash_skips_the_already_migrated_repo(
+        self, tmp_path, monkeypatch
+    ):
+        local_a, remote_a = _init_repo_with_remote(
+            tmp_path, "alpha", "cross_name: Alpha\n"
+        )
+        local_b, remote_b = _init_repo_with_remote(
+            tmp_path, "beta", "cross_name: Beta\n"
+        )
+        state = tmp_path / "state.json"
+        registry = [
+            {"name": "alpha", "path": str(local_a)},
+            {"name": "beta", "path": str(local_b)},
+        ]
+
+        import migration as migration_module
+
+        real = migration_module._migrate_one_repo
+
+        def crash_on_beta(project_template, plant_template, repo_path):
+            if Path(repo_path).name == "beta-local":
+                raise KeyboardInterrupt("simulated mid-run crash")
+            return real(project_template, plant_template, repo_path)
+
+        monkeypatch.setattr(migration_module, "_migrate_one_repo", crash_on_beta)
+        with pytest.raises(KeyboardInterrupt):
+            run_migration_across_repos(
+                PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+            )
+        alpha_sha = _remote_head_sha(remote_a)
+
+        monkeypatch.setattr(migration_module, "_migrate_one_repo", real)
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["alpha"]["status"] == "skipped"
+        assert report.repos["beta"]["status"] == "success"
+        assert _remote_head_sha(remote_a) == alpha_sha

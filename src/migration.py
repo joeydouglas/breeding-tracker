@@ -130,14 +130,50 @@ def _git(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
+def _has_origin(repo_path: Path) -> bool:
+    """True if this clone has an ``origin`` remote to push to at all."""
+    result = subprocess.run(
+        ["git", "remote"],
+        cwd=str(repo_path),
+        shell=False,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return "origin" in result.stdout.split()
+
+
+def _remote_sha(repo_path: Path, branch: str) -> str | None:
+    """The sha ``origin`` currently has for ``branch``, or None if absent.
+
+    Raises (via ``check=True``) if the remote is unreachable -- that is a
+    genuine migration failure for this repo, not an "already pushed" answer.
+    """
+    result = _git(["ls-remote", "origin", f"refs/heads/{branch}"], repo_path)
+    line = result.stdout.strip()
+    if not line:
+        return None
+    return line.split()[0]
+
+
 def _migrate_one_repo(
     project_template: str | Path, plant_template: str | Path, repo_path: Path
 ) -> dict[str, list[str]]:
     """Apply both templates to one repo's ``project.md`` and ``plants/*.md``.
 
     Returns a map of ``{relative_path: [added_field, ...]}`` for every file
-    that actually changed. Commits and pushes exactly once for the whole
-    repo when at least one file changed; makes no git call at all otherwise.
+    that actually changed.
+
+    Push is verified, not assumed. "The local file already matches the
+    template" is NOT the same claim as "this repo's committed state reached
+    the remote": a previous run can legitimately have applied the fields and
+    committed locally, then failed on the push (unreachable remote). On the
+    next run ``apply_new_fields`` reports ``changed=False`` for that repo, so
+    a naive implementation makes no git call at all, never retries the push,
+    and still records success -- permanently stranding the migration commit
+    in the local clone. So after the (possibly empty) field-apply, the local
+    HEAD is always compared against the remote branch tip and pushed if they
+    differ, then re-checked to confirm the push actually landed.
     """
     if not repo_path.is_dir():
         raise FileNotFoundError(f"repo path does not exist: {repo_path}")
@@ -158,15 +194,43 @@ def _migrate_one_repo(
                 added_fields[f"plants/{plant_file.name}"] = result.added_fields
 
     if added_fields:
-        _git(["add", "-A"], repo_path)
+        # Stage ONLY the files this migration actually rewrote. `git add -A`
+        # would sweep every unrelated dirty or untracked file in the working
+        # tree (a half-finished hand edit, scratch files, editor droppings)
+        # into the migration commit.
+        for relative_path in sorted(added_fields):
+            _git(["add", "--", relative_path], repo_path)
         _git(
-            ["commit", "-q", "-m", "chore: migrate to latest template fields"],
+            [
+                "commit",
+                "-q",
+                "-m",
+                "chore: migrate to latest template fields",
+                "--only",
+                "--",
+                *sorted(added_fields),
+            ],
             repo_path,
         )
-        branch = _git(
-            ["rev-parse", "--abbrev-ref", "HEAD"], repo_path
-        ).stdout.strip()
-        _git(["push", "-q", "origin", f"HEAD:refs/heads/{branch}"], repo_path)
+
+    if not _has_origin(repo_path):
+        # A local-only clone has nothing to push to; the commit above is the
+        # whole migration.
+        return added_fields
+
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_path).stdout.strip()
+    local_head = _git(["rev-parse", "HEAD"], repo_path).stdout.strip()
+
+    if _remote_sha(repo_path, branch) == local_head:
+        return added_fields  # already on the remote; nothing to push
+
+    _git(["push", "-q", "origin", f"HEAD:refs/heads/{branch}"], repo_path)
+
+    if _remote_sha(repo_path, branch) != local_head:
+        raise RuntimeError(
+            f"push reported success but {branch} on origin is not at "
+            f"{local_head} -- refusing to record this repo as migrated"
+        )
 
     return added_fields
 
@@ -199,6 +263,11 @@ def run_migration_across_repos(
     that failed last time is retried on the next call regardless of whether
     the templates changed, while repos that already succeeded at the
     current version are never re-touched by that retry.
+
+    State is persisted after EVERY repo, not once at the end: a mid-run
+    crash (Ctrl-C, OOM, reboot) must not throw away the record of repos that
+    already migrated and pushed successfully, forcing a restart to redo the
+    whole registry from scratch.
     """
     state_path = Path(state_path)
     state = _load_state(state_path)
@@ -237,6 +306,7 @@ def run_migration_across_repos(
                 "error": str(exc),
                 "added_fields": {},
             }
+            _save_state(state_path, state)
             continue
 
         state["repos"][name] = {
@@ -250,6 +320,7 @@ def run_migration_across_repos(
             "error": None,
             "added_fields": added_fields,
         }
+        _save_state(state_path, state)
 
     _save_state(state_path, state)
     return report
