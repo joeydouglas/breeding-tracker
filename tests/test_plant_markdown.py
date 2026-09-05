@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+import plant_markdown
 from plant_markdown import (
     DuplicateKeyError,
     MalformedFrontmatterError,
@@ -478,6 +479,51 @@ class TestMalformedInput:
                     UnsafeYamlError):
             assert issubclass(exc, PlantMarkdownError)
 
+    def test_unhashable_yaml_key_rejected_not_bare_typeerror(self, tmp_path, schema):
+        """A complex-key mapping entry (`? [a, b]`) is unhashable, so `key in
+        mapping` raised a bare TypeError that escaped read_plant entirely --
+        breaking the documented 'every error subclasses PlantMarkdownError'
+        contract for a caller (e.g. the webhook's git-pull handler) that only
+        catches PlantMarkdownError."""
+        p = tmp_path / "unhashable.md"
+        p.write_text(
+            "---\nid: A1\n? [a, b]\n: val\n---\n", encoding="utf-8"
+        )
+        with pytest.raises(PlantMarkdownError):
+            read_plant(p, schema=schema)
+
+
+class TestBlockScalarsStayStringsViaImplicitResolver:
+    """A YAML block literal (`|`) or folded (`>`) scalar is unambiguously a
+    string by the YAML spec itself -- unlike a plain scalar, there is no
+    ambiguity to resolve. Running its text through the implicit resolver
+    anyway (as if it were a plain scalar) can silently turn a leading-zero
+    or boolean-looking body into a non-string, exactly the class of bug
+    criterion (c) exists to prevent. (Exact trailing-newline chomping is an
+    implementation detail of the frontmatter/body delimiter split, not
+    asserted here -- only that the TYPE is never coerced away from string.)"""
+
+    def test_block_literal_digit_string_stays_string_not_int(self, tmp_path):
+        p = tmp_path / "block.md"
+        p.write_text("---\nid: |\n  07\n---\nbody\n", encoding="utf-8")
+        got = read_plant(p)
+        assert isinstance(got["id"], str)
+        assert got["id"].strip() == "07"
+
+    def test_block_folded_bool_looking_text_stays_string_not_bool(self, tmp_path):
+        p = tmp_path / "folded.md"
+        p.write_text("---\nid: >\n  true\n---\nbody\n", encoding="utf-8")
+        got = read_plant(p)
+        assert isinstance(got["id"], str)
+        assert got["id"].strip() == "true"
+
+    def test_block_literal_with_schema_coerces_as_string(self, tmp_path, schema):
+        p = tmp_path / "block2.md"
+        p.write_text("---\nid: |\n  007\n---\nbody\n", encoding="utf-8")
+        got = read_plant(p, schema=schema)
+        assert isinstance(got["id"], str)
+        assert got["id"].strip() == "007"
+
 
 class TestCrlfPreservation:
     """Review finding: read_plant used text-mode universal-newline translation,
@@ -489,6 +535,28 @@ class TestCrlfPreservation:
         body = "line one\r\nline two\r\n"
         write_plant(p, {"id": "C1", "observation_log": body}, schema=schema)
         assert read_plant(p, schema=schema)["observation_log"] == body
+
+    def test_crlf_rewrite_is_byte_stable(self, tmp_path, schema):
+        """Code-quality review finding: write_plant hardcoded LF delimiters
+        even when the body was CRLF, grafting LF headers onto a CRLF body
+        (mixed newlines, spurious whole-header diff on every touch).
+        Verifies line-ending CONSISTENCY (no LF/CRLF mix), not byte-identity
+        to a hand-authored minimal file -- schema defaults are legitimately
+        materialised on first read/write, so the file grows; what must not
+        happen is grafting LF delimiters onto a CRLF body."""
+        p = tmp_path / "crlf_hand.md"
+        with open(p, "wb") as fh:
+            fh.write(b"---\r\nid: C4\r\n---\r\nnote one\r\nnote two\r\n")
+        got = read_plant(p, schema=schema)
+        write_plant(p, got, schema=schema)
+        rewritten = p.read_bytes()
+        assert b"\r\n" in rewritten
+        # No bare LF anywhere that isn't part of a CRLF pair.
+        assert b"\n" not in rewritten.replace(b"\r\n", b"")
+        # A second rewrite is now byte-stable (canonical form reached).
+        canonical = rewritten
+        write_plant(p, read_plant(p, schema=schema), schema=schema)
+        assert p.read_bytes() == canonical
 
     def test_mixed_crlf_and_lf_body_survives_exactly(self, tmp_path, schema):
         p = tmp_path / "mixed.md"
@@ -688,3 +756,54 @@ class TestWriteValidation:
         write_plant(p, {"id": "A1", "observation_log": "note\n"}, schema=schema)
         text = p.read_text(encoding="utf-8")
         assert text.endswith("note\n") and not text.endswith("\n\n")
+
+
+class TestBlockScalarsStayStrings:
+    """Code-quality review finding: block scalars (| and >) were run through
+    the implicit resolver like any other plain scalar, so `id: >-\n  07`
+    yielded the int 7 -- violating both the YAML spec (block scalars are
+    ALWAYS strings) and this module's own "declared types win" rule."""
+
+    def test_folded_block_scalar_stays_string(self, tmp_path, schema):
+        p = tmp_path / "block.md"
+        p.write_text("---\nid: A1\nvigor: >-\n  07\n---\n", encoding="utf-8")
+        assert read_plant(p, schema=schema)["vigor"] == "07"
+
+    def test_literal_block_scalar_stays_string_no_schema(self, tmp_path):
+        p = tmp_path / "block2.md"
+        p.write_text("---\nid: |-\n  07\n---\n", encoding="utf-8")
+        assert read_plant(p)["id"] == "07"
+
+
+class TestUnhashableKeyRejected:
+    """Code-quality review finding: a YAML complex/collection key (e.g.
+    `? [a, b]`) is unhashable, so `_no_duplicates`'s `key in mapping` raised
+    a bare TypeError that escaped the documented PlantMarkdownError
+    contract entirely."""
+
+    def test_complex_key_rejected_as_malformed(self, tmp_path, schema):
+        p = tmp_path / "complexkey.md"
+        p.write_text("---\n? [a, b]\n: v\n---\n", encoding="utf-8")
+        with pytest.raises(MalformedFrontmatterError):
+            read_plant(p, schema=schema)
+
+
+class TestSymlinkSizeLimitNotBypassable:
+    """Code-quality review finding: read_plant used Path.stat() (follows
+    symlinks) to check MAX_FILE_BYTES, then read_text() unconditionally --
+    a symlink to a huge/infinite file (e.g. /dev/zero) reports a tiny
+    apparent size from stat() while the actual read is unbounded, hanging
+    the process. Files arrive via git pull from human-editable repos, and
+    git tracks symlinks, so this is in-scope for the documented threat
+    model."""
+
+    def test_oversized_content_rejected_even_via_capped_read(self, tmp_path, schema):
+        # Simulates the symlink-bypass scenario without actually needing
+        # /dev/zero or a real symlink: a file whose stat() size would look
+        # fine to a naive check, but whose true readable content exceeds
+        # the limit, must still be rejected by the capped-read approach.
+        p = tmp_path / "big.md"
+        big_body = "x" * (plant_markdown.MAX_FILE_BYTES + 100)
+        p.write_text(f"---\nid: A1\n---\n{big_body}", encoding="utf-8")
+        with pytest.raises(UnsafeYamlError):
+            read_plant(p, schema=schema)

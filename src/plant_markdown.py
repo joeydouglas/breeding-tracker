@@ -26,6 +26,7 @@ Design rules this module enforces:
 
 from __future__ import annotations
 
+import copy
 import os
 import tempfile
 from pathlib import Path
@@ -117,7 +118,7 @@ def _plain_scalar(loader: _StrictLoader, node: yaml.ScalarNode) -> Any:
         raise MalformedFrontmatterError(
             f"unsupported YAML tag: {node.tag}"
         )
-    if node.style in ('"', "'"):
+    if node.style in ('"', "'", "|", ">"):
         return node.value
     resolved_tag = yaml.resolver.Resolver().resolve(
         yaml.ScalarNode, node.value, (True, False)
@@ -144,13 +145,24 @@ def _no_duplicates(loader: _StrictLoader, node: yaml.MappingNode) -> dict:
     mapping: dict = {}
     for key_node, value_node in node.value:
         key = _unwrap(loader.construct_object(key_node, deep=True))
-        if key in mapping:
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            # A YAML complex/collection key (e.g. `? [a, b]`) is unhashable.
+            # Nothing in this schema ever needs non-scalar keys, so reject
+            # it as malformed input rather than let a bare TypeError escape
+            # the module's documented "everything raises PlantMarkdownError"
+            # contract to callers (e.g. the webhook's git-pull handler).
+            raise MalformedFrontmatterError(
+                f"unsupported (unhashable) YAML key: {key!r}"
+            ) from exc
+        if duplicate:
             raise DuplicateKeyError(f"duplicate key in frontmatter: {key!r}")
         mapping[key] = loader.construct_object(value_node, deep=True)
     return mapping
 
 
-def _no_anchors(self, node):  # pragma: no cover - exercised via compose
+def _no_anchors(loader: _StrictLoader) -> None:
     raise UnsafeYamlError("YAML anchors/aliases are not allowed in plant files")
 
 
@@ -218,7 +230,7 @@ def _compose_node_reject_anchors(
     """
     event = self.peek_event()
     if getattr(event, "anchor", None) is not None:
-        _no_anchors(self, None)
+        _no_anchors(self)
     return yaml.composer.Composer.compose_node(self, parent, index)
 
 
@@ -226,15 +238,25 @@ _StrictLoader.compose_node = _compose_node_reject_anchors  # type: ignore[method
 
 
 def _get_umask() -> int:
-    """Read the process umask without permanently changing it.
+    """Read the process umask ONCE at import time, without permanently
+    changing it.
 
     ``os.umask()`` is the only stdlib way to read the current umask, and it
-    always has the side effect of setting a new one -- so this immediately
-    restores the original value after reading it.
+    always has the side effect of setting a new one -- calling this on every
+    ``write_plant`` invocation would be racy (any other thread, or a
+    concurrently-forked child, creating a file during the brief window
+    where the umask is set to 0 would get it created with unmasked
+    permissions). Caching the value once at import time avoids the runtime
+    race entirely, at the cost of not tracking a umask changed later in the
+    process's lifetime -- an acceptable tradeoff since umask is normally
+    fixed for a process's lifetime anyway.
     """
     current = os.umask(0)
     os.umask(current)
     return current
+
+
+_CACHED_UMASK = _get_umask()
 
 
 def _check_depth(value: Any, depth: int = 0) -> None:
@@ -456,8 +478,6 @@ def load_schema(path: str | os.PathLike) -> dict:
 def _default_for(spec: Mapping[str, Any]) -> Any:
     default = spec.get("default")
     if isinstance(default, (list, dict)):
-        import copy
-
         return copy.deepcopy(default)
     return default
 
@@ -485,9 +505,31 @@ def read_plant(
     # Windows-checked-out (autocrlf=true) file's CRLF line endings in the
     # BODY must survive read_plant(write_plant(x)) == x byte-for-byte, not
     # get silently rewritten to LF.
-    text = file_path.read_text(encoding="utf-8", newline="")
+    #
+    # Read with an explicit cap rather than trusting `stat().st_size`: a
+    # git-committed symlink (e.g. to /dev/zero) reports a tiny/zero apparent
+    # size from stat() while the actual read can be unbounded, defeating the
+    # size check above entirely. Files arrive via `git pull` from repos
+    # humans hand-edit, and git tracks symlinks, so this is in-scope for the
+    # "untrusted input" threat model this module documents.
+    with open(file_path, "r", encoding="utf-8", newline="") as handle:
+        text = handle.read(MAX_FILE_BYTES + 1)
+    if len(text.encode("utf-8")) > MAX_FILE_BYTES:
+        raise UnsafeYamlError(
+            f"file exceeds the {MAX_FILE_BYTES}-byte limit (apparent size "
+            "from stat() may have been misleading, e.g. a symlink)"
+        )
     yaml_text, body = _split_frontmatter(text)
     data = _parse_yaml(yaml_text)
+    if BODY_FIELD in data:
+        # observation_log belongs in the markdown BODY, never in frontmatter
+        # -- silently discarding a hand-entered frontmatter value here would
+        # lose real data. Reject instead so a hand-edit mistake is caught
+        # immediately rather than a plant's notes vanishing without a trace.
+        raise MalformedFrontmatterError(
+            f"{BODY_FIELD!r} must not appear in frontmatter -- it belongs "
+            "in the markdown body below the closing '---'"
+        )
 
     if schema:
         result: dict[str, Any] = {}
@@ -501,8 +543,11 @@ def read_plant(
         for field, value in data.items():
             if field not in result and field != BODY_FIELD:
                 result[field] = _unwrap(value)
-        if BODY_FIELD in schema:
-            result[BODY_FIELD] = body
+        # Always return the body, even if the schema itself omits
+        # observation_log as a declared field -- write_plant always emits
+        # it, so omitting it here would break read_plant(write_plant(x))
+        # for any such schema (asymmetric round-trip).
+        result[BODY_FIELD] = body
         return result
 
     data = _unwrap(data)
@@ -558,7 +603,18 @@ def write_plant(
     if not ordered:
         yaml_text = ""
 
-    content = f"{DELIMITER}\n{yaml_text}{DELIMITER}\n{body}"
+    content_newline = "\r\n" if "\r\n" in body and "\n" not in body.replace("\r\n", "") else "\n"
+    # The write-side counterpart to read_plant's newline="" fix: if the
+    # BODY is CRLF-terminated (a Windows-authored or autocrlf=true-checked-
+    # out file), match the frontmatter delimiters/YAML block to the same
+    # line ending, rather than grafting hardcoded LF delimiters onto a CRLF
+    # body -- which would otherwise produce a mixed-newline file and a
+    # spurious whole-header diff on every single touch of such a file.
+    if content_newline == "\r\n":
+        yaml_text_out = yaml_text.replace("\n", "\r\n") if yaml_text else ""
+        content = f"{DELIMITER}\r\n{yaml_text_out}{DELIMITER}\r\n{body}"
+    else:
+        content = f"{DELIMITER}\n{yaml_text}{DELIMITER}\n{body}"
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -571,7 +627,7 @@ def write_plant(
     if target.exists():
         desired_mode = target.stat().st_mode & 0o777
     else:
-        desired_mode = 0o666 & ~_get_umask()
+        desired_mode = 0o666 & ~_CACHED_UMASK
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
     try:
         os.chmod(tmp_name, desired_mode)
