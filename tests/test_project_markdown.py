@@ -528,3 +528,234 @@ class TestWriteValidation:
         write_project(p, {"cross_name": "X", "body": "note\n"}, schema=schema)
         text = p.read_text(encoding="utf-8")
         assert text.endswith("note\n") and not text.endswith("\n\n")
+
+
+# ------------------------------------------------- spec-compliance review ----
+# The following classes cover gaps found by porting plant_markdown.py's
+# (Task 1.1's) hardened behavior across to project_markdown.py (Task 1.2),
+# which had drifted behind it.
+
+
+class TestCrlfPreservation:
+    """Task 1.1 parity: read_project used Path.read_text() WITHOUT
+    newline="", so universal-newline translation silently rewrote a
+    Windows-authored (or autocrlf=true-checked-out) CRLF body to LF; and
+    write_project hardcoded LF delimiters even for a CRLF body, producing a
+    mixed-newline file and a spurious whole-header diff on every touch."""
+
+    def test_crlf_body_survives_exactly(self, tmp_path, schema):
+        p = tmp_path / "crlf.md"
+        body = "line one\r\nline two\r\n"
+        write_project(p, {"cross_name": "C1", "body": body}, schema=schema)
+        assert read_project(p, schema=schema)["body"] == body
+
+    def test_manually_authored_crlf_file_read_verbatim(self, tmp_path, schema):
+        p = tmp_path / "crlf_hand.md"
+        with open(p, "wb") as fh:
+            fh.write(b"---\r\ncross_name: C3\r\n---\r\nnote one\r\nnote two\r\n")
+        assert (
+            read_project(p, schema=schema)["body"] == "note one\r\nnote two\r\n"
+        )
+
+    def test_crlf_rewrite_is_line_ending_consistent(self, tmp_path, schema):
+        p = tmp_path / "crlf_rw.md"
+        with open(p, "wb") as fh:
+            fh.write(b"---\r\ncross_name: C4\r\n---\r\nnote one\r\nnote two\r\n")
+        got = read_project(p, schema=schema)
+        write_project(p, got, schema=schema)
+        rewritten = p.read_bytes()
+        assert b"\r\n" in rewritten
+        # No bare LF anywhere that isn't part of a CRLF pair.
+        assert b"\n" not in rewritten.replace(b"\r\n", b"")
+        canonical = rewritten
+        write_project(p, read_project(p, schema=schema), schema=schema)
+        assert p.read_bytes() == canonical
+
+    def test_mixed_crlf_and_lf_body_survives_exactly(self, tmp_path, schema):
+        p = tmp_path / "mixed.md"
+        body = "unix line\nwindows line\r\nunix again\n"
+        write_project(p, {"cross_name": "C2", "body": body}, schema=schema)
+        assert read_project(p, schema=schema)["body"] == body
+
+
+class TestEmptyFrontmatterRoundTrip:
+    """Task 1.1 parity: write_project with zero frontmatter fields emits
+    '---\\n---\\nbody', which _split_frontmatter then rejected as
+    'unterminated frontmatter' -- the writer produced a file its own reader
+    could not read back."""
+
+    def test_write_with_no_fields_round_trips(self, tmp_path):
+        p = tmp_path / "empty.md"
+        write_project(p, {"body": "hello\n"}, schema=None)
+        assert read_project(p, schema=None)["body"] == "hello\n"
+
+    def test_write_with_no_fields_and_no_body_round_trips(self, tmp_path):
+        p = tmp_path / "empty2.md"
+        write_project(p, {}, schema=None)
+        assert read_project(p, schema=None)["body"] == ""
+
+    def test_write_with_no_fields_round_trips_with_schema(self, tmp_path, schema):
+        p = tmp_path / "empty3.md"
+        write_project(p, {}, schema=schema)
+        got = read_project(p, schema=schema)
+        assert got["body"] == ""
+        assert got["cross_name"] is None
+
+
+class TestHostileYamlRecursionGuard:
+    """Task 1.1 parity: PyYAML's composer hits Python's own recursion limit
+    while building nodes for a deeply-nested flow collection, raising a bare
+    RecursionError BEFORE the post-parse _check_depth runs -- escaping every
+    ProjectMarkdownError-catching caller."""
+
+    def test_extremely_deep_nesting_raises_project_markdown_error(
+        self, tmp_path, schema
+    ):
+        depth = 2000
+        p = tmp_path / "deep.md"
+        p.write_text(
+            "---\ncross_name: A1\nplant_id_prefixes: "
+            + "[" * depth
+            + "]" * depth
+            + "\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ProjectMarkdownError):
+            read_project(p, schema=schema)
+
+
+class TestUnknownSchemaTypeRejected:
+    """Task 1.1 parity: load_schema never validated the `type` vocabulary --
+    a typo'd `type: banana` silently disabled coercion for that field."""
+
+    def test_load_schema_rejects_unknown_type(self, tmp_path):
+        bad_template = tmp_path / "bad-template.md"
+        bad_template.write_text(
+            "---\ncross_name:\n  type: string\n  default: null\n  description: x\n"
+            "auto_create:\n  type: banana\n  default: null\n  description: y\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            load_schema(bad_template)
+
+    def test_load_schema_accepts_every_type_the_real_template_uses(self, schema):
+        assert {spec["type"] for spec in schema.values()} <= {
+            "string",
+            "integer",
+            "boolean",
+            "array",
+            "list",
+            "object",
+            "body",
+        }
+
+
+class TestUnhashableKeyRejected:
+    """Task 1.1 parity: a YAML complex/collection key (`? [a, b]`) is
+    unhashable, so _no_duplicates' `key in mapping` raised a bare TypeError
+    that escaped the documented ProjectMarkdownError contract."""
+
+    def test_complex_key_rejected_as_malformed(self, tmp_path, schema):
+        p = tmp_path / "complexkey.md"
+        p.write_text("---\n? [a, b]\n: v\n---\n", encoding="utf-8")
+        with pytest.raises(MalformedFrontmatterError):
+            read_project(p, schema=schema)
+
+
+class TestSymlinkSizeLimitNotBypassable:
+    """Task 1.1 parity: read_project used Path.stat() (which follows
+    symlinks) for the MAX_FILE_BYTES guard, then read the file
+    unconditionally -- a git-committed symlink to /dev/zero reports a tiny
+    apparent size while the actual read is unbounded."""
+
+    def test_oversized_content_rejected_even_via_capped_read(self, tmp_path, schema):
+        import project_markdown
+
+        p = tmp_path / "big.md"
+        big_body = "x" * (project_markdown.MAX_FILE_BYTES + 100)
+        p.write_text(f"---\ncross_name: A1\n---\n{big_body}", encoding="utf-8")
+        with pytest.raises(UnsafeYamlError):
+            read_project(p, schema=schema)
+
+    def test_symlink_to_unbounded_device_does_not_exhaust_memory(self, tmp_path):
+        """The real scenario: a git-committed symlink to /dev/zero. stat()
+        follows it and reports size 0, so the pre-read guard passes, and an
+        uncapped read then consumes memory without bound (this test OOMs the
+        interpreter against the unfixed code). Run in a child process under
+        a hard address-space limit so a regression fails fast and loudly
+        instead of taking the whole test session down with it."""
+        import os
+        import subprocess
+        import sys
+
+        if not os.path.exists("/dev/zero"):
+            pytest.skip("/dev/zero unavailable on this platform")
+        link = tmp_path / "link.md"
+        os.symlink("/dev/zero", link)
+
+        program = (
+            "import resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024,) * 2)\n"
+            "sys.path.insert(0, %r)\n"
+            "import project_markdown\n"
+            "try:\n"
+            "    project_markdown.read_project(%r)\n"
+            "except project_markdown.ProjectMarkdownError:\n"
+            "    print('OK')\n"
+            % (str(Path(__file__).resolve().parents[1] / "src"), str(link))
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", program],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert proc.stdout.strip() == "OK", (
+            f"expected ProjectMarkdownError, got rc={proc.returncode} "
+            f"stderr={proc.stderr[-500:]!r}"
+        )
+
+
+class TestWritePermissionsPreserved:
+    """Task 1.1 parity: tempfile.mkstemp always creates 0600 and os.replace
+    preserves the temp file's mode, so rewriting an existing 0644
+    (the normal git-tracked mode) project.md silently downgraded it."""
+
+    def test_rewriting_existing_file_preserves_its_mode(self, tmp_path, schema):
+        import os
+
+        p = tmp_path / "perm.md"
+        write_project(p, {"cross_name": "A1"}, schema=schema)
+        os.chmod(p, 0o644)
+        write_project(p, {"cross_name": "A1", "auto_create": True}, schema=schema)
+        assert (p.stat().st_mode & 0o777) == 0o644
+
+    def test_new_file_gets_permissive_default_mode(self, tmp_path, schema):
+        p = tmp_path / "newperm.md"
+        write_project(p, {"cross_name": "A1"}, schema=schema)
+        mode = p.stat().st_mode & 0o777
+        assert mode != 0o600, "new project files must not be created world-unreadable"
+
+
+class TestBodyKeyInFrontmatterRejected:
+    """Task 1.1 parity: 'body' belongs in the markdown BODY, never in
+    frontmatter. read_project SILENTLY DISCARDED a hand-entered frontmatter
+    'body:' key, losing real data; plant_markdown rejects the analogous
+    observation_log case outright."""
+
+    def test_body_in_frontmatter_is_rejected_not_discarded(self, tmp_path, schema):
+        p = tmp_path / "bodykey.md"
+        p.write_text(
+            "---\ncross_name: A1\nbody: oops hand-entered\n---\nreal body\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            read_project(p, schema=schema)
+
+    def test_body_in_frontmatter_rejected_without_schema(self, tmp_path):
+        p = tmp_path / "bodykey2.md"
+        p.write_text(
+            "---\ncross_name: A1\nbody: oops\n---\nreal body\n", encoding="utf-8"
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            read_project(p)

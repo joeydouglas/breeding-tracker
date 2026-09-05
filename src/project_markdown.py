@@ -52,6 +52,9 @@ BODY_FIELD = "body"
 MAX_FILE_BYTES = 1 * 1024 * 1024
 MAX_NESTING_DEPTH = 20
 _SCHEMA_KEYS = frozenset({"type", "default", "description"})
+_KNOWN_SCHEMA_TYPES = frozenset(
+    {"string", "integer", "boolean", "list", "array", "object", "body"}
+)
 
 
 # --------------------------------------------------------------- errors ----
@@ -145,7 +148,18 @@ def _no_duplicates(loader: _StrictLoader, node: yaml.MappingNode) -> dict:
     mapping: dict = {}
     for key_node, value_node in node.value:
         key = _unwrap(loader.construct_object(key_node, deep=True))
-        if key in mapping:
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            # A YAML complex/collection key (e.g. `? [a, b]`) is unhashable.
+            # Nothing in this schema ever needs non-scalar keys, so reject it
+            # as malformed input rather than let a bare TypeError escape the
+            # module's documented "everything raises ProjectMarkdownError"
+            # contract to callers (e.g. the webhook's git-pull handler).
+            raise MalformedFrontmatterError(
+                f"unsupported (unhashable) YAML key: {key!r}"
+            ) from exc
+        if duplicate:
             raise DuplicateKeyError(f"duplicate key in frontmatter: {key!r}")
         mapping[key] = loader.construct_object(value_node, deep=True)
     return mapping
@@ -196,6 +210,16 @@ def _parse_yaml(text: str) -> dict:
         loaded = yaml.load(text, Loader=_StrictLoader)
     except (DuplicateKeyError, UnsafeYamlError):
         raise
+    except RecursionError as exc:
+        # PyYAML's composer can hit Python's own recursion limit while
+        # building nodes for a deeply-nested flow collection, raising a bare
+        # RecursionError BEFORE our post-parse _check_depth ever runs. That
+        # would otherwise escape every ProjectMarkdownError-catching caller
+        # (e.g. the webhook's git-pull handler) as an unrelated exception.
+        raise UnsafeYamlError(
+            f"structure nested deeper than {MAX_NESTING_DEPTH} levels "
+            "(hit Python's recursion limit while parsing)"
+        ) from exc
     except yaml.YAMLError as exc:
         raise MalformedFrontmatterError(f"invalid YAML frontmatter: {exc}") from exc
 
@@ -218,19 +242,58 @@ def _parse_yaml_plain(text: str) -> dict:
 
 
 def _split_frontmatter(text: str) -> tuple[str, str]:
-    """Return ``(yaml_text, body)``; the body is returned verbatim."""
-    if not text.startswith(DELIMITER + "\n"):
+    """Return ``(yaml_text, body)``; the body is returned verbatim.
+
+    The delimiter lines themselves may end in ``\\n`` or ``\\r\\n`` (a file
+    hand-edited on Windows, or checked out with ``core.autocrlf=true``, uses
+    CRLF throughout, including on the ``---`` lines) -- only the BODY's own
+    line endings need to be preserved byte-for-byte, so the delimiter search
+    tolerates either.
+    """
+    if text.startswith(DELIMITER + "\r\n"):
+        rest = text[len(DELIMITER) + 2 :]
+    elif text.startswith(DELIMITER + "\n"):
+        rest = text[len(DELIMITER) + 1 :]
+    else:
         raise MalformedFrontmatterError(
             "file must begin with a '---' frontmatter delimiter on line 1"
         )
-    rest = text[len(DELIMITER) + 1 :]
-    marker = "\n" + DELIMITER + "\n"
-    end = rest.find(marker)
-    if end == -1:
-        if rest.endswith("\n" + DELIMITER):
-            return rest[: -(len(DELIMITER) + 1)], ""
-        raise MalformedFrontmatterError("unterminated frontmatter: no closing '---'")
-    return rest[:end], rest[end + len(marker) :]
+    # Empty frontmatter: write_project emits "---\n---\nbody" when there are
+    # zero fields, so the closing delimiter sits at position 0 of `rest` with
+    # no preceding blank line -- the general "\n---\n"/"\r\n---\r\n" marker
+    # below requires a newline BEFORE the closing delimiter, which doesn't
+    # exist here. Handle it before falling into that search, so the writer
+    # never produces a file its own reader rejects.
+    for lead in (DELIMITER + "\r\n", DELIMITER + "\n"):
+        if rest.startswith(lead):
+            return "", rest[len(lead) :]
+    if rest == DELIMITER:
+        return "", ""
+    for marker in ("\r\n" + DELIMITER + "\r\n", "\n" + DELIMITER + "\n"):
+        end = rest.find(marker)
+        if end != -1:
+            return rest[:end], rest[end + len(marker) :]
+    for tail in ("\r\n" + DELIMITER, "\n" + DELIMITER):
+        if rest.endswith(tail):
+            return rest[: -len(tail)], ""
+    raise MalformedFrontmatterError("unterminated frontmatter: no closing '---'")
+
+
+def _get_umask() -> int:
+    """Read the process umask ONCE at import time, without permanently
+    changing it.
+
+    ``os.umask()`` is the only stdlib way to read the current umask, and it
+    always has the side effect of setting a new one -- calling this on every
+    ``write_project`` invocation would be racy. Caching the value once at
+    import time avoids the runtime race entirely.
+    """
+    current = os.umask(0)
+    os.umask(current)
+    return current
+
+
+_CACHED_UMASK = _get_umask()
 
 
 # ------------------------------------------------------------- coercion ----
@@ -359,7 +422,7 @@ def load_schema(path: str | os.PathLike) -> dict:
     Each returned default is a fresh object, so callers mutating one
     project's default list/dict can never corrupt another's.
     """
-    text = Path(path).read_text(encoding="utf-8")
+    text = Path(path).read_text(encoding="utf-8", newline="")
     yaml_text, _ = _split_frontmatter(text)
     raw = _parse_yaml_plain(yaml_text)
 
@@ -369,6 +432,11 @@ def load_schema(path: str | os.PathLike) -> dict:
             raise MalformedFrontmatterError(
                 f"{field}: template fields must be {{type, default, description}} "
                 "descriptor objects, not example values"
+            )
+        if spec["type"] not in _KNOWN_SCHEMA_TYPES:
+            raise MalformedFrontmatterError(
+                f"{field}: unknown schema type {spec['type']!r}, expected one "
+                f"of {sorted(_KNOWN_SCHEMA_TYPES)}"
             )
         schema[field] = {
             "type": spec["type"],
@@ -406,9 +474,36 @@ def read_project(
             f"file is {size} bytes, exceeding the {MAX_FILE_BYTES}-byte limit"
         )
 
-    text = file_path.read_text(encoding="utf-8")
+    # newline="" disables universal-newline translation: a hand-edited or
+    # Windows-checked-out (autocrlf=true) file's CRLF line endings in the
+    # BODY must survive read_project(write_project(x)) == x byte-for-byte,
+    # not get silently rewritten to LF.
+    #
+    # Read with an explicit cap rather than trusting `stat().st_size`: a
+    # git-committed symlink (e.g. to /dev/zero) reports a tiny/zero apparent
+    # size from stat() while the actual read can be unbounded, defeating the
+    # size check above entirely. Files arrive via `git pull` from repos
+    # humans hand-edit, and git tracks symlinks, so this is in-scope for the
+    # "untrusted input" threat model this module documents.
+    with open(file_path, "r", encoding="utf-8", newline="") as handle:
+        text = handle.read(MAX_FILE_BYTES + 1)
+    if len(text.encode("utf-8")) > MAX_FILE_BYTES:
+        raise UnsafeYamlError(
+            f"file exceeds the {MAX_FILE_BYTES}-byte limit (apparent size "
+            "from stat() may have been misleading, e.g. a symlink)"
+        )
     yaml_text, body = _split_frontmatter(text)
     data = _parse_yaml(yaml_text)
+    if BODY_FIELD in data:
+        # `body` belongs in the markdown BODY, never in frontmatter --
+        # silently discarding a hand-entered frontmatter value here would
+        # lose real data. Reject instead so a hand-edit mistake is caught
+        # immediately rather than a project's notes vanishing without a
+        # trace.
+        raise MalformedFrontmatterError(
+            f"{BODY_FIELD!r} must not appear in frontmatter -- it belongs "
+            "in the markdown body below the closing '---'"
+        )
 
     if schema:
         result: dict[str, Any] = {}
@@ -478,12 +573,38 @@ def write_project(
     if not ordered:
         yaml_text = ""
 
-    content = f"{DELIMITER}\n{yaml_text}{DELIMITER}\n{body}"
+    content_newline = (
+        "\r\n"
+        if "\r\n" in body and "\n" not in body.replace("\r\n", "")
+        else "\n"
+    )
+    # The write-side counterpart to read_project's newline="" fix: if the
+    # BODY is CRLF-terminated (a Windows-authored or autocrlf=true-checked-
+    # out file), match the frontmatter delimiters/YAML block to the same
+    # line ending, rather than grafting hardcoded LF delimiters onto a CRLF
+    # body -- which would otherwise produce a mixed-newline file and a
+    # spurious whole-header diff on every single touch of such a file.
+    if content_newline == "\r\n":
+        yaml_text_out = yaml_text.replace("\n", "\r\n") if yaml_text else ""
+        content = f"{DELIMITER}\r\n{yaml_text_out}{DELIMITER}\r\n{body}"
+    else:
+        content = f"{DELIMITER}\n{yaml_text}{DELIMITER}\n{body}"
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    # tempfile.mkstemp always creates its file mode 0600, and os.replace
+    # preserves whatever mode the source (temp) file had -- so rewriting an
+    # existing, normally-permissioned file (e.g. 0644, the usual mode for a
+    # git-tracked file) would silently downgrade it to 0600 on every write.
+    # Match the target's existing mode when rewriting, or fall back to a
+    # permissive default (respecting umask) for a brand-new file.
+    if target.exists():
+        desired_mode = target.stat().st_mode & 0o777
+    else:
+        desired_mode = 0o666 & ~_CACHED_UMASK
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
     try:
+        os.chmod(tmp_name, desired_mode)
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(content)
             handle.flush()
