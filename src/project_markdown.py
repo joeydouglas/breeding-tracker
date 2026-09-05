@@ -121,7 +121,7 @@ def _plain_scalar(loader: _StrictLoader, node: yaml.ScalarNode) -> Any:
         raise MalformedFrontmatterError(
             f"unsupported YAML tag: {node.tag}"
         )
-    if node.style in ('"', "'"):
+    if node.style in ('"', "'", "|", ">"):
         return node.value
     resolved_tag = yaml.resolver.Resolver().resolve(
         yaml.ScalarNode, node.value, (True, False)
@@ -165,14 +165,41 @@ def _no_duplicates(loader: _StrictLoader, node: yaml.MappingNode) -> dict:
     return mapping
 
 
-def _no_anchors(self, node):  # pragma: no cover - exercised via compose
+def _no_anchors(loader: _StrictLoader) -> None:
     raise UnsafeYamlError("YAML anchors/aliases are not allowed in project files")
 
 
 _StrictLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates
 )
-_StrictLoader.add_constructor(None, _plain_scalar)
+
+
+def _reject_unknown_tag(loader: _StrictLoader, node: yaml.Node) -> Any:
+    """Fallback for any tag not explicitly recognised.
+
+    Plain (untagged) scalars never reach this: PyYAML's implicit resolver
+    always assigns them one of the standard tags registered below before
+    construction runs. Only an EXPLICITLY tagged node (custom local tags like
+    ``!whatever``, or dangerous ones like ``!!python/name:...``) lands here,
+    so unconditional rejection is correct and safe.
+    """
+    raise MalformedFrontmatterError(f"unsupported YAML tag: {node.tag}")
+
+
+def _reject_collection_tag(loader: _StrictLoader, node: yaml.Node) -> Any:
+    """Reject YAML's non-scalar/mapping/sequence collection types.
+
+    ``!!set``, ``!!omap``, ``!!pairs`` and ``!!binary`` are all "safe" as far
+    as PyYAML's SafeLoader is concerned (they never construct arbitrary
+    Python objects), but our schema only ever needs plain scalars, lists and
+    mappings. Letting these through would silently hand back non-JSON-
+    serialisable values (``set``, ``bytes``) that ``write_project`` can't
+    round-trip either.
+    """
+    raise MalformedFrontmatterError(f"unsupported YAML tag: {node.tag}")
+
+
+_StrictLoader.add_constructor(None, _reject_unknown_tag)
 for _tag in (
     "tag:yaml.org,2002:null",
     "tag:yaml.org,2002:bool",
@@ -182,13 +209,35 @@ for _tag in (
     "tag:yaml.org,2002:str",
 ):
     _StrictLoader.add_constructor(_tag, _plain_scalar)
-_StrictLoader.compose_node = (  # type: ignore[method-assign]
-    lambda self, parent, index: (
-        _no_anchors(self, None)
-        if self.check_event(yaml.events.AliasEvent)
-        else yaml.composer.Composer.compose_node(self, parent, index)
-    )
-)
+for _tag in (
+    "tag:yaml.org,2002:set",
+    "tag:yaml.org,2002:omap",
+    "tag:yaml.org,2002:pairs",
+    "tag:yaml.org,2002:binary",
+):
+    _StrictLoader.add_constructor(_tag, _reject_collection_tag)
+
+
+def _compose_node_reject_anchors(
+    self: _StrictLoader, parent: yaml.Node, index: Any
+) -> yaml.Node:
+    """Reject any node carrying an anchor, whether or not it's ever aliased.
+
+    The previous implementation only fired on an *alias reference*
+    (``AliasEvent``), so a bare, never-referenced anchor definition like
+    ``cross_name: &a big`` parsed fine — contradicting the module's own
+    documented "anchors are refused outright" contract. Every composable
+    event (scalar, sequence-start, mapping-start, alias) carries an
+    ``.anchor`` attribute; checking it before composing catches definitions
+    and references alike.
+    """
+    event = self.peek_event()
+    if getattr(event, "anchor", None) is not None:
+        _no_anchors(self)
+    return yaml.composer.Composer.compose_node(self, parent, index)
+
+
+_StrictLoader.compose_node = _compose_node_reject_anchors  # type: ignore[method-assign]
 
 
 def _check_depth(value: Any, depth: int = 0) -> None:

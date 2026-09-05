@@ -759,3 +759,194 @@ class TestBodyKeyInFrontmatterRejected:
         )
         with pytest.raises(MalformedFrontmatterError):
             read_project(p)
+
+
+# ------------------------- code-quality review round 3 (Task 1.2 parity) ----
+#
+# These mirror test_plant_markdown.py's equivalent classes one-for-one,
+# adapted to project.md's schema/fields. project_markdown.py had silently
+# drifted behind plant_markdown.py on every behaviour below; keeping the two
+# suites symmetrical is what stops that happening again.
+
+
+class TestCollectionTagsRejected:
+    """Parity gap: !!set / !!omap / !!pairs / !!binary aren't plain
+    scalars/mappings/sequences this schema ever needs, but nothing rejected
+    them: SafeLoader's own machinery constructed them into native
+    (set/bytes/list-of-tuples) objects that are neither JSON-serialisable nor
+    writable back out (yaml.representer.RepresenterError, not a
+    ProjectMarkdownError). plant_markdown.py rejects all four."""
+
+    def test_yaml_set_tag_rejected(self, tmp_path, schema):
+        p = tmp_path / "set.md"
+        p.write_text(
+            "---\ncross_name: A1\nnotes_meta: !!set {a: null, b: null}\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            read_project(p, schema=schema)
+
+    def test_yaml_omap_tag_rejected(self, tmp_path, schema):
+        p = tmp_path / "omap.md"
+        p.write_text(
+            "---\ncross_name: A1\nnotes_meta: !!omap\n  - a: 1\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            read_project(p, schema=schema)
+
+    def test_yaml_pairs_tag_rejected(self, tmp_path, schema):
+        p = tmp_path / "pairs.md"
+        p.write_text(
+            "---\ncross_name: A1\nnotes_meta: !!pairs\n  - a: 1\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            read_project(p, schema=schema)
+
+    def test_yaml_binary_tag_rejected(self, tmp_path, schema):
+        p = tmp_path / "binary.md"
+        p.write_text(
+            "---\ncross_name: A1\nnotes_meta: !!binary |\n  aGVsbG8=\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            read_project(p, schema=schema)
+
+
+class TestCustomScalarTagsRejected:
+    """Parity gap: an explicit non-standard tag on a plain scalar
+    (`!whatever hello`) fell through to `_plain_scalar` registered as the
+    None (fallback) constructor, which re-resolved the VALUE via the implicit
+    resolver and silently DISCARDED the tag entirely -- contradicting this
+    module's own documented 'parsing rejects ... custom tags' claim."""
+
+    def test_custom_tag_on_scalar_rejected(self, tmp_path, schema):
+        p = tmp_path / "customtag.md"
+        p.write_text(
+            "---\ncross_name: A1\ngenetics: !whatever hello\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            read_project(p, schema=schema)
+
+    def test_python_name_tag_on_scalar_rejected(self, tmp_path, schema):
+        p = tmp_path / "pyname.md"
+        p.write_text(
+            "---\ncross_name: A1\ngenetics: !!python/name:os.system ''\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ProjectMarkdownError):
+            read_project(p, schema=schema)
+
+    def test_custom_tag_on_mapping_rejected(self, tmp_path, schema):
+        p = tmp_path / "customtagmap.md"
+        p.write_text(
+            "---\ncross_name: A1\ndrive_folders: !custom {a: 1}\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(MalformedFrontmatterError):
+            read_project(p, schema=schema)
+
+
+class TestAnchorsRejectedEvenUnaliased:
+    """Parity gap: the module docstring claims anchors are 'refused
+    outright', but the guard only fired on an AliasEvent -- a bare,
+    never-referenced anchor DEFINITION (`cross_name: &a big`) parsed fine,
+    contradicting the documented contract. plant_markdown.py checks
+    `event.anchor` on every composable event instead."""
+
+    def test_unaliased_anchor_on_scalar_is_still_rejected(self, tmp_path, schema):
+        p = tmp_path / "anchor_only.md"
+        p.write_text("---\ncross_name: &a big\n---\n", encoding="utf-8")
+        with pytest.raises(UnsafeYamlError):
+            read_project(p, schema=schema)
+
+    def test_unaliased_anchor_on_mapping_is_still_rejected(self, tmp_path, schema):
+        p = tmp_path / "anchor_map.md"
+        p.write_text(
+            "---\ncross_name: A1\ndrive_folders: &d\n  photos: x\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(UnsafeYamlError):
+            read_project(p, schema=schema)
+
+    def test_unaliased_anchor_on_sequence_is_still_rejected(self, tmp_path, schema):
+        p = tmp_path / "anchor_seq.md"
+        p.write_text(
+            "---\ncross_name: A1\nplant_id_prefixes: &p [Ltz]\n---\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(UnsafeYamlError):
+            read_project(p, schema=schema)
+
+
+class TestBlockScalarsStayStrings:
+    """Parity gap: block scalars (`|` and `>`) were run through the implicit
+    resolver like any other plain scalar, so `cross_name: >-\\n  07` yielded
+    the int 7 -- violating both the YAML spec (block scalars are ALWAYS
+    strings) and this module's own 'declared types win' rule.
+    `_plain_scalar` short-circuited on `'`/`"` only, not `|`/`>`."""
+
+    def test_folded_block_scalar_stays_string(self, tmp_path, schema):
+        p = tmp_path / "block.md"
+        p.write_text("---\ncross_name: >-\n  07\n---\n", encoding="utf-8")
+        assert read_project(p, schema=schema)["cross_name"] == "07"
+
+    def test_literal_block_scalar_stays_string_no_schema(self, tmp_path):
+        p = tmp_path / "block2.md"
+        p.write_text("---\ncross_name: |-\n  07\n---\n", encoding="utf-8")
+        assert read_project(p)["cross_name"] == "07"
+
+    def test_block_literal_digit_string_stays_string_not_int(self, tmp_path):
+        p = tmp_path / "block3.md"
+        p.write_text("---\ncross_name: |\n  07\n---\nbody\n", encoding="utf-8")
+        got = read_project(p)
+        assert isinstance(got["cross_name"], str)
+        assert got["cross_name"].strip() == "07"
+
+    def test_block_folded_bool_looking_text_stays_string_not_bool(self, tmp_path):
+        p = tmp_path / "folded.md"
+        p.write_text("---\ncross_name: >\n  true\n---\nbody\n", encoding="utf-8")
+        got = read_project(p)
+        assert isinstance(got["cross_name"], str)
+        assert got["cross_name"].strip() == "true"
+
+    def test_block_literal_with_schema_coerces_as_string(self, tmp_path, schema):
+        p = tmp_path / "block4.md"
+        p.write_text("---\ncross_name: |\n  007\n---\nbody\n", encoding="utf-8")
+        got = read_project(p, schema=schema)
+        assert isinstance(got["cross_name"], str)
+        assert got["cross_name"].strip() == "007"
+
+
+class TestUnhashableYamlKeyRejected:
+    """Parity gap: a YAML complex/collection key (`? [a, b]`) is unhashable,
+    so `_no_duplicates`'s `key in mapping` raised a bare TypeError that
+    escaped the documented 'every error subclasses ProjectMarkdownError'
+    contract for a caller (e.g. the webhook's git-pull handler)."""
+
+    def test_unhashable_yaml_key_rejected_not_bare_typeerror(self, tmp_path, schema):
+        p = tmp_path / "unhashable.md"
+        p.write_text(
+            "---\ncross_name: A1\n? [a, b]\n: val\n---\n", encoding="utf-8"
+        )
+        with pytest.raises(ProjectMarkdownError):
+            read_project(p, schema=schema)
+
+
+class TestCrlfRewriteByteStability:
+    """Parity gap: plant_markdown.py asserts a CRLF file reaches a canonical
+    form after one rewrite and is then BYTE-stable on every subsequent
+    rewrite; project_markdown.py only asserted line-ending consistency."""
+
+    def test_crlf_rewrite_is_byte_stable(self, tmp_path, schema):
+        p = tmp_path / "crlf_hand.md"
+        with open(p, "wb") as fh:
+            fh.write(b"---\r\ncross_name: C4\r\n---\r\nnote one\r\nnote two\r\n")
+        write_project(p, read_project(p, schema=schema), schema=schema)
+        canonical = p.read_bytes()
+        assert b"\r\n" in canonical
+        assert b"\n" not in canonical.replace(b"\r\n", b"")
+        write_project(p, read_project(p, schema=schema), schema=schema)
+        assert p.read_bytes() == canonical
