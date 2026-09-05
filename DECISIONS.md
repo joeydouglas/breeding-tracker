@@ -370,3 +370,103 @@ records every argv the function issues and fails if any names `github.com` or
 any http(s) URL, and an autouse fixture strips `GITHUB_TOKEN` from the
 environment for every test in the module — an ambient real token cannot leak
 into a test push.
+
+## Task 2.4 — the "NICK-592 multi-cross cycling test" was prose, not an artifact
+
+Task 2.4's spec says to *"replay the NICK-592 multi-cross cycling test"*. **No
+such runnable artifact exists** — searching this repo, `breeding-markdown`,
+all six wrappers and the full git history for `NICK-592` / `multi-cross` /
+`cycling` returns only prose:
+
+* `breeding_core.py`'s module docstring — NICK-592 consolidated six drifted
+  per-project copies of the pipeline after NICK-589 found Mule Fuel, Lantz and
+  Spaced Paste missing keeper/culled detection entirely.
+* every wrapper's comment about the gateway plugin *"cycling through crosses in
+  one long-lived process via `importlib.reload()`"*. **That** is the "cycling":
+  one process, one shared `breeding_core`, six crosses handled in turn, each
+  with its own `BREEDING_DIR`, roster, ID pattern and `AUTO_CREATE` policy.
+
+So the cycling test was an ad-hoc historical verification. It is now a
+committed artifact: `tests/test_multicross_regression.py`. Recorded here so no
+later task re-hunts for a script that never existed.
+
+### What the committed replay does
+
+One module-scoped pass cycles **round-robin** through sandboxed copies of all
+six real projects — one observation per project per round, 25 rounds — driving
+the complete pipeline (`parse_observation` -> `update_plant` -> `save_tracker`
+-> `markdown_backend` -> `push_to_github`). Starting state is each project's
+**real** `tracker.json`, copied in and migrated through the new backend;
+observation text is Task 2.2's committed 24-case fixture, addressed to that
+project's real roster IDs, plus one novel ID that exercises `AUTO_CREATE` on
+the three pheno hunts and the ❌-not-found branch on the three doc-imported
+rosters.
+
+Verification is the two-armed shape Task 2.2 established:
+
+1. **Differential.** The identical observation sequence runs against a second
+   copy of the same real starting data on the FROZEN JSON-era implementation
+   (`tests/fixtures/baseline_breeding_core_2dd0537.py`). Every plant of every
+   project must match field for field. Both arms are fed the *same* parsed
+   observation dict — `parse_observation` stamps `datetime.now()`, and parser
+   equivalence is already pinned differentially by
+   `test_nick592_parsing_spec.py`.
+2. **Byte-for-byte against the fixture.** The auto-created plant is the one
+   plant in the pass that starts from a fresh `make_blank_plant()` — exactly
+   the state `plant_after` was derived against — so its fields and the Discord
+   reply string must equal the fixture verbatim.
+
+### DISCREPANCIES: exactly one, and it is the already-approved deviation
+
+Across all six projects and every plant, the only field that ever differed
+between the JSON era and the markdown era was `vigor` (`9` -> `'9'`) — the
+deviation documented above under *Task 2.2*, caused by Phase 1's approved
+`plant-template.md` typing `vigor` as free text. The differential tolerates it
+**only** as `str(json_value)`; any other vigor drift, and any drift in any
+other field, fails. No new bug surfaced, and no production code changed in this
+task.
+
+### POLICY: non-vacuity guards, because this suite is mostly conditional
+
+Three assertions here could silently degrade into zero coverage, so each has an
+explicit guard:
+
+* `test_the_fixture_comparison_is_not_vacuous` — exactly the three pheno hunts
+  must auto-create, so the byte-for-byte comparison always runs on three
+  projects rather than skipping all six.
+* `test_every_project_replayed_the_whole_fixture` — all 24 cases + the novel ID
+  per project; a trimmed fixture or short-circuited round-robin would otherwise
+  pass everything trivially.
+* `test_the_vigor_deviation_is_actually_exercised` — at least one plant must
+  actually show the tolerated coercion, or the differential's one tolerance is
+  itself untested.
+
+The suite was also mutation-checked: reverting `update_plant`'s status
+assignment for `culled` (NICK-589's original bug, the exact defect NICK-592
+existed to prevent) turns it RED in 10 tests.
+
+### POLICY: the replay is module-scoped, and that is load-bearing
+
+A function-scoped replay re-ran the whole six-project, two-backend pass for
+each of ~40 tests: 6.5 minutes and enough small-file churn to hit `Disk quota
+exceeded` on the tmpfs backing `tmp_path`. The pass is deterministic apart from
+timestamps, so it runs **once** per session (~35 s) via a `scope="module"`
+fixture. Consequences, both deliberate:
+
+* `monkeypatch` is function-scoped and therefore unusable in it; `BREEDING_DIR`
+  / `BREEDING_DISABLE_PUSH` are set and restored by an explicit
+  `_sandbox_env()` context manager instead.
+* Tests must not mutate the shared state. `test_reloading_the_markdown_is_idempotent`
+  round-trips into its own `tmp_path`, not the replay's sandbox.
+
+### Sandbox proof is taken from the pass itself, not a re-run
+
+The `replay` fixture checksums every file under all six **real** project dirs
+(and under `breeding-markdown`) immediately before and after the pass and
+returns the digests, so the isolation tests assert on THIS pass rather than an
+extra one. `__pycache__` is excluded: importing a wrapper legitimately rewrites
+bytecode in the real dir, which is not a data change. Pushes go to a throwaway
+local bare repo per project under `tmp_path`; `test_no_replay_targets_a_real_remote`
+fails if any origin names `github.com`. No Discord, Drive or network call
+anywhere. `generate_dashboard.py` is deliberately not copied into the sandbox,
+so `update_plant`'s dashboard subprocess is a harmless, already-unchecked no-op.
