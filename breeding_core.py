@@ -517,11 +517,20 @@ def refresh_meta_repo():
 
 
 def _compile_prefixes(entry):
-    """``[{prefix, pattern}, ...]`` -> ``[(prefix, compiled), ...]``."""
+    """``[{prefix, pattern}, ...]`` -> ``[(prefix, compiled), ...]``.
+
+    Compiled with ``re.IGNORECASE`` to match ``extract_plant_ids_single``,
+    which passes that flag to ``re.findall``. Without it the multi-prefix path
+    was case-SENSITIVE while the single-prefix path was not, so a two-prefix
+    project silently failed to match ``xa05`` where a one-prefix project
+    matched ``ya05`` fine. Kibungan's real patterns embed an inline ``(?i)``,
+    which happened to hide the asymmetry in production; under this flag that
+    inline group is merely redundant, never conflicting.
+    """
     compiled = []
     for spec in entry.get('plant_id_prefixes') or []:
         try:
-            compiled.append((spec['prefix'], re.compile(spec['pattern'])))
+            compiled.append((spec['prefix'], re.compile(spec['pattern'], re.IGNORECASE)))
         except KeyError as exc:
             raise ValueError(
                 f"{REGISTRY_FILENAME}: project {entry.get('slug')!r} has a "
@@ -538,6 +547,52 @@ def _compile_prefixes(entry):
             "plant_id_prefixes, so no message could ever route to it"
         )
     return compiled
+
+
+_DEFAULT_BREEDING_ROOT = Path.home() / ".hermes" / "breeding"
+
+
+def _breeding_root():
+    """The directory every project's ``breeding_dir`` must live under.
+
+    ``~/.hermes/breeding/`` -- where all six real projects actually are.
+    ``BREEDING_ROOT_DIR`` overrides it so a sandbox or container can point
+    elsewhere without a code change, the same precedent as ``BREEDING_META_DIR``
+    above and ``markdown_backend``'s ``BREEDING_MARKDOWN_DIR``.
+    """
+    override = os.environ.get("BREEDING_ROOT_DIR")
+    return Path(override).expanduser() if override else _DEFAULT_BREEDING_ROOT
+
+
+def _validated_breeding_dir(raw, slug, path):
+    """Resolve and contain one entry's ``breeding_dir``.
+
+    ``registry.json`` is trusted local data, but ``breeding_dir`` is the one
+    field that becomes a WRITE TARGET (``save_tracker``,
+    ``markdown_backend.save_plant``), so it is contained anyway: a typo'd or
+    hostile entry like ``~/.hermes/../../../tmp/pwned`` or ``/etc`` must not be
+    able to aim plant markdown at an arbitrary directory. The path is
+    ``resolve()``d FIRST so ``..`` segments are collapsed and cannot smuggle an
+    escape past the containment check. The root itself is rejected too -- it is
+    the container of projects, not a project.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(
+            f"{path}: project {slug!r} has no usable 'breeding_dir' "
+            f"(got {raw!r}); every project must name the "
+            "directory its tracker.json and plant markdown live in"
+        )
+
+    root = _breeding_root().expanduser().resolve()
+    resolved = Path(raw).expanduser().resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        raise ValueError(
+            f"{path}: project {slug!r} has a 'breeding_dir' outside the "
+            f"breeding tree: {raw!r} resolves to {resolved}, which is not "
+            f"under {root}. Set BREEDING_ROOT_DIR if the tree really lives "
+            "elsewhere."
+        )
+    return resolved
 
 
 def _validate_registry(data, path):
@@ -577,23 +632,27 @@ def _validate_registry(data, path):
         # by then the traceback no longer says which project was malformed.
         # Blank/whitespace counts as missing -- an empty path silently resolves
         # to the process CWD, which would scatter a cross's plant markdown into
-        # whatever directory the bot happened to start in.
-        breeding_dir = entry.get('breeding_dir')
-        if not isinstance(breeding_dir, str) or not breeding_dir.strip():
-            raise ValueError(
-                f"{path}: project {slug!r} has no usable 'breeding_dir' "
-                f"(got {breeding_dir!r}); every project must name the "
-                "directory its tracker.json and plant markdown live in"
-            )
+        # whatever directory the bot happened to start in. It is also CONTAINED
+        # to the breeding root; see ``_validated_breeding_dir``.
+        _validated_breeding_dir(entry.get('breeding_dir'), slug, path)
 
+        # Prefix uniqueness is case-INSENSITIVE, because matching is: patterns
+        # compile with re.IGNORECASE, so 'sp' and 'SP' are the same prefix and
+        # a registry declaring both would route one message to two crosses.
+        # (spaced-paste really does use a lowercase 'sp'.) Both original
+        # spellings are named in the error so a human can see which two
+        # entries actually collided.
         for prefix, _ in _compile_prefixes(entry):
-            if prefix in seen_prefixes:
+            key = prefix.casefold()
+            if key in seen_prefixes:
+                other_prefix, other_slug = seen_prefixes[key]
                 raise ValueError(
-                    f"{path}: prefix {prefix!r} is claimed by both "
-                    f"{seen_prefixes[prefix]!r} and {slug!r} -- a message "
+                    f"{path}: prefix {other_prefix!r} (project {other_slug!r}) "
+                    f"and prefix {prefix!r} (project {slug!r}) are the same "
+                    "prefix -- matching is case-insensitive, so a message "
                     "using it would route ambiguously"
                 )
-            seen_prefixes[prefix] = slug
+            seen_prefixes[key] = (prefix, slug)
 
     return data
 

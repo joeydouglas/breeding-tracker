@@ -473,6 +473,10 @@ so `update_plant`'s dashboard subprocess is a harmless, already-unchecked no-op.
 
 ## Task 2.5 — project routing built as DATA (`registry.json`), proven but not yet adopted
 
+**TL;DR:** this task built the routing *mechanism* and proved it; production
+still needs the 3 code changes listed under SCOPE below to add a 7th cross.
+Adoption (rewiring the gateway onto `registry.json`) is a later, separate task.
+
 ### The plan described a `_CROSS_DIRS` dict — it exists, but not in this file
 
 Task 2.5's brief was "replace the hardcoded `_CROSS_DIRS` dict in
@@ -723,3 +727,62 @@ asserted identical before and after. A second test feeds that registry-derived
 config straight into `process_message` and confirms it creates and persists
 `plants/ZQ12.md` with `status: top_keeper` — proving the config is genuinely
 usable, not just a lookup that returns a plausible dict.
+
+### Round-2 review: three latent registry bugs, all empirically reproduced
+
+The final Phase 2 code-quality gate reproduced three real defects in the
+routing code. All three are fixed with regression tests in
+`tests/test_review_round2_registry_fixes.py`.
+
+**Prefix uniqueness is now case-INSENSITIVE.** The README promised "a duplicate
+is rejected at load time rather than silently routing a message to the wrong
+cross", but the check keyed on the raw string. A registry with project `a`
+declaring `sp` and project `b` declaring `SP` validated clean, and
+`route_message("SP05 fire")` returned *both* projects. Not hypothetical:
+`spaced-paste` really does use a lowercase `sp`. Uniqueness now keys on
+`prefix.casefold()`, and the error names **both** original spellings and both
+slugs — the previous message named only the winner, which is useless when you
+are trying to find the pair that collided.
+
+**`re.IGNORECASE` is now symmetric between the single- and multi-prefix paths.**
+`extract_plant_ids_single` passed `re.IGNORECASE` to `re.findall`;
+`_compile_prefixes` compiled with no flags at all. So a two-prefix project with
+`\bXA(\d{1,2})\b` did *not* match `xa05` while a one-prefix project with
+`\bYA(\d{1,2})\b` *did* match `ya05` — the same registry, two different
+answers, depending only on how many prefixes the project happened to declare.
+This was invisible in production only because Kibungan, the sole real
+multi-prefix project, happens to embed `(?i)` inline in both its patterns:
+**real data was compensating for a latent code bug.** `_compile_prefixes` now
+passes `re.IGNORECASE`, which is backward compatible (Kibungan's inline `(?i)`
+becomes redundant, not conflicting — asserted directly against the real entry).
+The README's schema table now *states* the case-insensitivity rather than
+leaving it as a convention each pattern author must remember to implement.
+
+**`breeding_dir` is contained to the breeding tree.** `registry.json` is
+trusted local data — but `breeding_dir` is the one field that becomes a write
+target (`save_tracker`, `markdown_backend.save_plant`), and it was validated
+for presence/non-blankness only, never for shape or containment. Values like
+`~/.hermes/../../../tmp/pwned` and `/etc` loaded without complaint.
+
+The recorded threat-model decision: *registry.json is trusted local data, but
+`breeding_dir` is still contained to prevent an accidental or malicious entry
+from writing outside the breeding tree.* Blast radius was nil at the time of
+the review — nothing in production reads `registry.json` yet — which is why the
+finding was Important rather than Critical, and why it was worth fixing while
+it was still cheap and had no migration cost.
+
+`_validated_breeding_dir` now `expanduser()`s and `resolve()`s each value
+(collapsing `..` **before** the check, so traversal cannot slip past a naive
+prefix comparison) and requires the result to be strictly under
+`~/.hermes/breeding/` — the root all six real projects actually live in.
+`BREEDING_ROOT_DIR` overrides that root, matching the existing
+`BREEDING_META_DIR` / `BREEDING_MARKDOWN_DIR` precedent, which is what lets the
+sandbox test fixtures keep using `tmp_path` project dirs. The root itself is
+rejected: it is the container of projects, not a project. Errors name the
+offending slug, the raw value, and the resolved path.
+
+Seven previously untested `_validate_registry` / `_compile_prefixes` error
+branches (non-dict top level, non-list `projects`, unsupported schema version,
+missing slug, duplicate slug, prefix spec missing a key, invalid regex,
+zero-prefix project) also got tests in the same file — the messages were
+already well written, they were simply unexercised.

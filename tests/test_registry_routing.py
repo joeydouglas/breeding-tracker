@@ -115,6 +115,10 @@ def meta_repo(tmp_path, monkeypatch):
     _git(["push", "-q", "-u", "origin", "main"], repo)
 
     monkeypatch.setenv("BREEDING_META_DIR", str(repo))
+    # Sandbox projects live under tmp_path, not ``~/.hermes/breeding``, so the
+    # breeding_dir containment root (round-2 review fix #3) is pointed there
+    # too. Same override precedent as BREEDING_META_DIR itself.
+    monkeypatch.setenv("BREEDING_ROOT_DIR", str(tmp_path))
     return repo
 
 
