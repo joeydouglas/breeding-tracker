@@ -145,3 +145,83 @@ loss, crashes, or incorrect behavior on the actual breeding-tracker data.
 
 Final state after both review stages: 111 tests (test_plant_markdown.py +
 test_real_data_roundtrip.py), 100% green, zero warnings.
+
+## Task 1.2 / 1.3 spec-compliance review findings (2026-09-05)
+
+11 empirically-verified gaps, all reproduced with probe scripts before any
+fix, all fixed under strict TDD (regression test watched RED, then GREEN).
+
+### `project_markdown.py` (Task 1.2) had drifted behind `plant_markdown.py`
+
+Task 1.1 went through two review rounds and got hardened; Task 1.2 was
+written against the pre-hardening shape of the same module and never
+received those fixes. All 8 are ports of an already-approved Task 1.1 fix,
+so the two modules now agree on behavior rather than diverging silently:
+
+1. `read_project` used `Path.read_text()` WITHOUT `newline=""`, so
+   universal-newline translation silently mangled a CRLF body to LF; and
+   `write_project` hardcoded LF frontmatter delimiters even for a CRLF body,
+   producing a mixed-newline file. Ported the newline-preserving read and
+   the CRLF-matching write.
+2. `write_project({'body': 'hello\n'})` emitted `---\n---\nhello\n`, which
+   `read_project` then rejected as "unterminated frontmatter" -- the writer
+   produced output its own reader could not read. Ported the
+   empty-frontmatter special case in `_split_frontmatter`.
+3. A deeply-nested YAML flow collection raised a bare `RecursionError` out
+   of the module instead of the documented `ProjectMarkdownError` contract.
+   Ported the `RecursionError` -> `UnsafeYamlError` catch.
+4. `load_schema` never validated the `type` vocabulary -- `type: banana` was
+   silently accepted, disabling coercion for that field with no error.
+   Ported the known-types validation (with project's own `boolean`/`object`
+   types included).
+5. An unhashable YAML complex key (`? [a, b]`) leaked a bare `TypeError` out
+   of `read_project`. Ported the `try/except` around the membership check.
+6. `read_project` used `Path.stat()` (which follows symlinks) with no cap on
+   the actual read -- a git-committed symlink to `/dev/zero` reports size 0
+   and then consumes memory without bound. Ported the explicit
+   `MAX_FILE_BYTES + 1` read cap that checks bytes actually read. The
+   regression test drives the real `/dev/zero` symlink in a child process
+   under `RLIMIT_AS`, so a regression fails loudly instead of OOM-ing the
+   whole test session.
+7. `write_project` never chmod'd the temp file before `os.replace`, so every
+   rewrite of a normal 0644 git-tracked file silently downgraded it to 0600.
+   Ported the chmod-before-replace fix (and the cached-umask helper it needs).
+8. A hand-edited `body:` key in frontmatter was SILENTLY DISCARDED rather
+   than rejected, losing real hand-entered data. Ported the explicit
+   rejection, matching how `plant_markdown` treats `observation_log`.
+
+### `migration.py` (Task 1.3): three real bugs the existing tests missed
+
+1. **Push-stranding (the serious one).** With a reachable local clone but an
+   unreachable remote, run 1 correctly reported `failed` -- but
+   `apply_new_fields` had already applied the fields and committed locally
+   before the push raised. On retry with the remote restored,
+   `apply_new_fields` returned `changed=False` (the file already matched the
+   template), so `_migrate_one_repo` made no git call at all, never retried
+   the push, and the state file recorded `success` at the current template
+   version -- while `git ls-remote` on the restored remote was still empty.
+   That permanently and silently skipped a repo whose changes never left the
+   local clone, and no existing test could see it because every existing
+   failure case used an unreachable *local path*, never an unreachable
+   *remote*. Fixed by refusing to conflate "the local file already reflects
+   the template" with "this repo's committed state has been pushed":
+   `_migrate_one_repo` now compares local `HEAD` against the remote branch
+   tip on every run, pushes when they differ regardless of whether any field
+   changed this run, and re-checks the remote afterwards, raising rather
+   than reporting success if the commit isn't confirmed there.
+2. `git add -A` swept every dirty/untracked file in the working tree into
+   the migration commit -- a half-finished hand edit on a repo the migration
+   happens to run against would be committed and pushed under a
+   `chore: migrate to latest template fields` message. Now stages and
+   commits only the specific markdown files this run rewrote.
+3. `_save_state` ran only after the entire registry loop finished, so a
+   mid-run crash persisted nothing and a restart re-migrated every repo from
+   scratch, including ones that had already pushed successfully -- defeating
+   the resumability the module's own docstring promises. State is now
+   persisted after each repo's attempt, success or failure.
+
+Note on scope: `src/plant_markdown.py` and `src/scaffolding.py` were read as
+reference only and deliberately not modified -- Tasks 1.1 and 1.4 already
+passed review.
+
+Final state: 248 tests, 100% green, zero warnings (`pytest -W error`).
