@@ -16,11 +16,13 @@ copy this file's logic back into a per-project script -- add new shared
 behavior here so every project picks it up automatically.
 """
 
+import base64
 import os
 import re
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import markdown_backend
 
@@ -233,24 +235,107 @@ def update_markdown(plant, breeding_dir):
     markdown_backend.save_plant(plant, breeding_dir)
 
 
-def push_to_github(breeding_dir, github_repo, disable_push):
-    """Commit and push dashboard changes."""
-    if disable_push:
-        return
-    dashboard_dir = breeding_dir / 'dashboard'
+# The only paths this function is allowed to stage: the markdown record of
+# truth. Everything else in a live project dir (tracker.json, cache/,
+# photo_staging/, __pycache__/, .save_tracker-staging-*) stays out of the
+# data repo.
+_DATA_PATHS = ('project.md', 'plants')
 
-    subprocess.run(['git', 'add', '.'], cwd=dashboard_dir, capture_output=True)
-    subprocess.run(['git', 'commit', '-m', f'Auto-update from Discord observation {datetime.now().isoformat()}'],
-                    cwd=dashboard_dir, capture_output=True)
+
+def _git(args, cwd):
+    """One git command, never raising. Every call site here is best-effort:
+    a push failure must not break the Discord ingestion reply, exactly as in
+    the JSON era."""
+    return subprocess.run(
+        ['git', *args], cwd=str(cwd), capture_output=True, text=True
+    )
+
+
+def _push_repo(repo, paths):
+    """Stage ``paths``, commit if anything changed, push to ``origin``.
+
+    Never raises: every git call is best-effort, exactly as in the JSON era,
+    so a push failure cannot break the Discord ingestion reply.
+    """
+    if not (repo / '.git').exists():
+        return
+
+    _git(['add', '--all', '--', *paths], repo)
+
+    if _git(['diff', '--cached', '--quiet'], repo).returncode != 0:
+        _git(
+            ['commit', '-m',
+             f'Auto-update from Discord observation {datetime.now().isoformat()}'],
+            repo,
+        )
+
+    if 'origin' not in _git(['remote'], repo).stdout.split():
+        return
+
+    branch = _git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).stdout.strip()
+    if not branch or branch == 'HEAD':  # detached: no branch to push to
+        return
 
     # Token resolved via 1Password at gateway startup -- see
     # `hermes secrets onepassword status`.
     token = os.environ.get("GITHUB_TOKEN")
+    config = []
     if token:
-        subprocess.run(
-            ['git', 'push', f'https://{token}@github.com/{github_repo}.git', 'main'],
-            cwd=dashboard_dir, capture_output=True
-        )
+        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        config = ['-c', f'http.extraHeader=Authorization: Basic {basic}']
+
+    _git([*config, 'push', '-q', 'origin', f'HEAD:refs/heads/{branch}'], repo)
+
+
+def push_to_github(breeding_dir, github_repo, disable_push):
+    """Commit and push this project's MARKDOWN DATA REPO (and, for now, its
+    legacy dashboard repo).
+
+    PHASE 2 / TASK 2.3. Signature and best-effort, never-raising contract are
+    unchanged from the JSON era; the target and the staging rule changed.
+
+    * **New target.** `breeding_dir` itself is now a repo (`project.md` +
+      `plants/<ID>.md`) -- the record of truth an observation actually
+      mutates, which the new frontend renders via the data API.
+    * **Transitional second target.** `breeding_dir/'dashboard'` is STILL
+      pushed. Today all six live projects serve GitHub Pages from that repo
+      and NONE of the project dirs is a git repo yet, so dropping it would
+      silently freeze every live dashboard for the whole Phase 3-7 window.
+      Each repo is handled independently, so a project in either shape (only
+      `dashboard/` today, both mid-cutover, only the data repo after Task 7.3
+      removes `dashboard/`) works with no code change. Delete the second call
+      at Task 7.3.
+    * **Staging.** `git add --all -- project.md plants` for the data repo, NOT
+      `git add .`: a live project dir also holds `tracker.json`, `cache/`,
+      `photo_staging/`, `__pycache__/` and `save_tracker`'s
+      `.save_tracker-staging-*` scratch dirs, none of which belongs in the
+      data repo. `--all` (rather than a plain path-limited add) is required so
+      a plant DELETED from the roster -- `save_tracker` unlinks its file -- is
+      committed as a deletion instead of lingering on the remote forever. The
+      dashboard repo keeps its JSON-era whole-directory staging; it holds only
+      generated HTML.
+    * **Empty commits.** A `git commit` with nothing staged is skipped, so a
+      no-op observation does not append a commit per Discord message.
+    * **Push.** Always attempted when an `origin` exists, even when this call
+      staged nothing: a previous run's commit may have been made while the
+      remote was unreachable, and `git push` is a no-op when already current.
+      This is Phase 1's push-stranding lesson (see `breeding-markdown`'s
+      DECISIONS.md) applied here. `HEAD:refs/heads/<branch>` uses the repo's
+      real branch, and a detached HEAD is refused rather than pushed to a junk
+      `HEAD` branch -- also a Phase 1 lesson.
+
+    `github_repo` is retained for signature compatibility (all six wrappers
+    pass it) but no longer BUILDS a URL: each push goes to that repo's own
+    `origin`. A `GITHUB_TOKEN` is supplied as an `http.extraHeader` instead of
+    being interpolated into a remote URL, so it never lands in `.git/config`,
+    `git remote -v`, or an error log.
+    """
+    if disable_push:
+        return
+
+    repo = Path(breeding_dir)
+    _push_repo(repo, _DATA_PATHS)
+    _push_repo(repo / 'dashboard', ('.',))
 
 
 def extract_plant_ids_single(message_text, pattern, prefix):

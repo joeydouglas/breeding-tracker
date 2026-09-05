@@ -207,3 +207,80 @@ appears verbatim in an observation. The check is therefore made against the
 recorded **parse results** instead, which is both correct and stricter: the
 parser records the regex source, so `'fox.*tail'` must actually have been
 matched by some case rather than merely mentioned.
+
+## Task 2.3 — `push_to_github()` now publishes the data repo, and keeps publishing the dashboard
+
+Task 2.3 rewrote `push_to_github()` for the markdown backend. The JSON-era
+function was pure `git`, not the GitHub REST API — `git add .` / `git commit`
+in `breeding_dir/'dashboard'`, then `git push https://$TOKEN@github.com/<repo>.git main`.
+So there was never an API surface to sandbox; the whole function is testable
+against a throwaway local bare repo, and the entire Task 2.3 suite pushes only
+to `git init --bare` targets under `tmp_path`.
+
+### The bug Task 2.1 left behind: this function was still pointed at the dashboard
+
+Tasks 2.1/2.2 changed *what an observation writes* (`project.md` +
+`plants/<ID>.md`) but not *what gets published*. `push_to_github()` still
+committed only `dashboard/`, so after 2.1 an observation mutated the markdown
+record of truth and pushed **none of it** — the data repo never received a
+single commit. Verified, not assumed: the pre-change function's paths do not
+mention `project.md` or `plants/` anywhere.
+
+### POLICY: the dashboard push STAYS, transitionally
+
+The obvious fix — repoint the function at `breeding_dir` — would have been a
+silent production outage. Checked against the real filesystem: today all six
+projects have a git repo at `dashboard/` (each with a live GitHub Pages
+`origin`) and **none** of the six project dirs is a git repo at all. A
+markdown-only push would therefore have frozen all six live dashboards for the
+entire Phase 3–7 window while pushing nothing anywhere.
+
+So the function pushes **both** repos, each fully independently via a shared
+`_push_repo()` helper that no-ops on a missing `.git`. That makes every
+lifecycle shape work with no code change: dashboard-only (today), both
+(mid-cutover), data-repo-only (after Task 7.3 removes `dashboard/`). **Task
+7.3 should delete the second `_push_repo` call** — that is the intended
+removal point, recorded here so it is not left behind as mystery code.
+
+### Staging is path-limited for the data repo, `.` for the dashboard
+
+`git add .` is correct for `dashboard/` (generated HTML only) but wrong for a
+project dir, which also holds `tracker.json`, `cache/`, `photo_staging/`,
+`__pycache__/` and `save_tracker`'s own `.save_tracker-staging-*` scratch
+dirs — a blanket add would publish staged photos and legacy JSON into a
+private data repo. The data repo therefore stages exactly
+`git add --all -- project.md plants`.
+
+`--all` rather than a plain path-limited add is load-bearing: `save_tracker`'s
+whole-roster semantics *unlink* a dropped plant's file, and without `--all`
+that deletion is never staged, so the plant would live on the remote forever
+while being gone locally. Pinned by its own test.
+
+### Empty-commit suppression, and Phase 1's push-stranding lesson
+
+The JSON-era code ran `git commit` unconditionally and only pushed *if a token
+was set*. Both are now fixed: a commit is skipped when nothing is staged (no
+more one-commit-per-Discord-message churn), and the push is attempted whenever
+an `origin` exists — even when this call staged nothing — because a previous
+run may have committed while the remote was unreachable. That is exactly the
+push-stranding failure `breeding-markdown/DECISIONS.md` records from Task 1.3,
+applied here rather than re-learned. Likewise `HEAD:refs/heads/<branch>` with
+an explicit detached-HEAD refusal, from the same source: the JSON era
+hardcoded `main`.
+
+### The token no longer goes in a URL
+
+`https://$TOKEN@github.com/...` writes the credential into anything that logs
+the argv or the remote. It is now passed as `-c http.extraHeader=Authorization: Basic <b64>`,
+so it never reaches `.git/config` or `git remote -v` — asserted by a test.
+`github_repo` is consequently unused for URL construction; it is kept in the
+signature because all six wrappers pass it, and each push targets that repo's
+own `origin`.
+
+### Test-suite safety
+
+Beyond using local bare repos, `test_no_command_ever_mentions_github_com`
+records every argv the function issues and fails if any names `github.com` or
+any http(s) URL, and an autouse fixture strips `GITHUB_TOKEN` from the
+environment for every test in the module — an ambient real token cannot leak
+into a test push.
