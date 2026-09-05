@@ -16,25 +16,38 @@ copy this file's logic back into a per-project script -- add new shared
 behavior here so every project picks it up automatically.
 """
 
-import json
 import os
 import re
 import subprocess
 import sys
 from datetime import datetime
 
+import markdown_backend
+
 TERPENE_KEYWORDS = ['fuel', 'gas', 'citrus', 'fruity', 'sweet', 'earthy', 'pine', 'skunky', 'diesel']
 STRUCTURE_KEYWORDS = ['frosty', 'dense', 'sandy', 'sticky', 'purple', 'tight', 'fox.*tail', 'stretch']
 
 
 def load_tracker(tracker_file):
-    with open(tracker_file) as f:
-        return json.load(f)
+    """Load a project's tracker.
+
+    PHASE 2 / TASK 2.1: the on-disk format is now markdown -- `project.md`
+    plus `plants/<ID>.md` in `tracker_file`'s parent directory -- not
+    `tracker.json`. The SIGNATURE and the returned data shape are unchanged,
+    so every per-project `monitor_breeding_notes.py` wrapper keeps calling
+    `core.load_tracker(TRACKER_FILE)` with no edit at all. `tracker_file`
+    itself is no longer read; only its parent directory is used.
+    """
+    return markdown_backend.load_tracker(tracker_file)
 
 
 def save_tracker(tracker, tracker_file):
-    with open(tracker_file, 'w') as f:
-        json.dump(tracker, f, indent=2)
+    """Save a project's tracker to markdown (see load_tracker for the format).
+
+    Signature, argument order and `None` return are unchanged from the JSON
+    era; only the persistence backend differs.
+    """
+    markdown_backend.save_tracker(tracker, tracker_file)
 
 
 def parse_observation(text):
