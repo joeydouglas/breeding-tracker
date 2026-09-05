@@ -30,6 +30,19 @@ PROVENANCE OF THE SPEC (see also the fixture's ``description`` field):
     every fixture case is asserted against BOTH implementations. The fixture
     is therefore a pin on the JSON era's real behavior, not merely on today's.
 
+    That baseline source is COMMITTED, byte-for-byte, as
+    ``tests/fixtures/baseline_breeding_core_2dd0537.py`` -- it is not read out
+    of live git history at test time. Shelling out to ``git show`` made the
+    entire differential guarantee evaporate silently the moment history was
+    unavailable (a tarball export, a shallow/filtered clone, or the baseline
+    commit being GC'd -- nothing pins 2dd0537: no tag, no branch, no remote):
+    the suite skipped 28 tests and still exited 0. The frozen copy removes
+    both the subprocess and the live-history dependency. An OPTIONAL
+    cross-check (:func:`test_frozen_baseline_matches_git_history`) still
+    verifies the frozen copy against ``git show`` WHEN git history happens to
+    be available, so drift is caught where it can be -- but the differential
+    tests themselves never depend on it.
+
 Everything here is SANDBOX-ONLY (pytest ``tmp_path``): no Discord, Drive,
 network or git-push side effect, and no real project directory is written.
 """
@@ -49,6 +62,13 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "nick592_parsing_spec.json"
 # tracker persistence)". The JSON-era parse_observation/update_plant field
 # logic is the specification this task must not have changed.
 BASELINE_COMMIT = "2dd0537"
+
+# The frozen, committed copy of ``breeding_core.py`` at BASELINE_COMMIT. THIS
+# is what the differential tests execute -- see the module docstring. Loading
+# it requires no git, no subprocess, and no reachable history.
+BASELINE_SNAPSHOT_PATH = (
+    Path(__file__).parent / "fixtures" / f"baseline_breeding_core_{BASELINE_COMMIT}.py"
+)
 
 if str(MONITOR_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_CORE_DIR))
@@ -74,23 +94,45 @@ def _fmt(case_text):
 def _json_era_module():
     """``breeding_core`` as of the pre-Phase-2 baseline commit.
 
+    Read from the FROZEN, COMMITTED snapshot at
+    :data:`BASELINE_SNAPSHOT_PATH` -- never from live git history, and never
+    via a subprocess. There is deliberately NO skip path: if the snapshot is
+    missing the differential guarantee is gone, and that must fail the suite
+    loudly rather than turn 28 tests into silent skips that still exit 0.
+
     Executed in an isolated module namespace. Only ``parse_observation`` and
     ``make_blank_plant`` are ever called from it -- both are pure, so nothing
     touches the filesystem, the network, or a real project directory.
     """
-    proc = subprocess.run(
-        ["git", "show", f"{BASELINE_COMMIT}:breeding_core.py"],
-        cwd=MONITOR_CORE_DIR,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        pytest.skip(f"baseline commit {BASELINE_COMMIT} not available")
+    source = BASELINE_SNAPSHOT_PATH.read_text(encoding="utf-8")
 
     module = types.ModuleType("_json_era_breeding_core")
     module.__file__ = str(MONITOR_CORE_DIR / "breeding_core.py")
-    exec(compile(proc.stdout, "<json-era breeding_core.py>", "exec"), module.__dict__)
+    exec(
+        compile(source, f"<json-era breeding_core.py @{BASELINE_COMMIT}>", "exec"),
+        module.__dict__,
+    )
     return module
+
+
+def _git_show_baseline():
+    """The baseline source straight out of git history, or ``None``.
+
+    ``None`` means git history is not available here (no git binary, not a
+    repository, a shallow/filtered clone, or the baseline commit has been
+    GC'd). That is an ACCEPTABLE state -- it only disables the optional
+    cross-check below, never the differential tests themselves.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "show", f"{BASELINE_COMMIT}:breeding_core.py"],
+            cwd=MONITOR_CORE_DIR,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
 
 
 @pytest.fixture(scope="module")
@@ -468,6 +510,17 @@ def test_fixture_covers_every_required_behavior():
     for kw in breeding_core.TERPENE_KEYWORDS:
         assert kw in all_text, f"terpene keyword {kw!r} is not exercised"
 
+    # Same symmetry for STRUCTURE_KEYWORDS, which the check above omitted.
+    # Matched against the recorded PARSE RESULTS rather than the raw case
+    # text, because a structure keyword may be a regex ('fox.*tail') whose
+    # source never appears literally in any observation -- and the parser
+    # records that regex source, so this is both correct and stricter.
+    structure_seen = {
+        kw for c in CASES for kw in (c["parse"]["structure"] or [])
+    }
+    for kw in breeding_core.STRUCTURE_KEYWORDS:
+        assert kw in structure_seen, f"structure keyword {kw!r} is not exercised"
+
 
 def test_fixture_case_names_are_unique():
     assert len(CASE_IDS) == len(set(CASE_IDS))
@@ -475,3 +528,76 @@ def test_fixture_case_names_are_unique():
 
 def test_fixture_is_versioned():
     assert SPEC["fixture_version"] >= 1
+
+
+# --------------------------------------------------------------------------
+# Frozen-baseline integrity
+# --------------------------------------------------------------------------
+
+
+def test_frozen_baseline_snapshot_is_committed_and_loadable():
+    """The differential guarantee's single point of failure, asserted loudly.
+
+    If the snapshot goes missing, every differential test below would either
+    error or (under the old ``git show`` + ``pytest.skip`` loader) vanish into
+    silent skips while the suite still exited 0. This test makes that state a
+    hard, obvious failure with a name that says exactly what was lost.
+    """
+    assert BASELINE_SNAPSHOT_PATH.is_file(), (
+        f"the frozen JSON-era baseline is missing: {BASELINE_SNAPSHOT_PATH}. "
+        "Without it the entire Task 2.2 differential guarantee is void; "
+        f"restore it with: git show {BASELINE_COMMIT}:breeding_core.py > "
+        f"{BASELINE_SNAPSHOT_PATH}"
+    )
+
+    module = _json_era_module()
+    for attr in ("parse_observation", "make_blank_plant", "TERPENE_KEYWORDS",
+                 "STRUCTURE_KEYWORDS"):
+        assert hasattr(module, attr), f"frozen baseline lacks {attr}"
+
+
+def test_baseline_loading_never_silently_skips():
+    """Regression pin for the review finding this file was rewritten to fix.
+
+    The loader must not consult git, must not spawn a subprocess, and must
+    not contain a skip path -- repointing BASELINE_COMMIT at a dead SHA used
+    to turn 28 differential tests into silent skips with an exit code of 0.
+    Checked against the loader's executable body only (docstring stripped),
+    since the docstring legitimately discusses git and subprocesses.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(_json_era_module)))
+    func = tree.body[0]
+    if ast.get_docstring(func) is not None:
+        func.body = func.body[1:]
+    body = ast.unparse(func)
+
+    assert "pytest.skip" not in body
+    assert "subprocess" not in body
+    assert "git" not in body
+
+
+def test_frozen_baseline_matches_git_history():
+    """OPTIONAL cross-check: frozen copy vs. the real commit.
+
+    Skipped -- and ONLY skipped -- when git history genuinely is not
+    available. That is safe here precisely because nothing else in this file
+    depends on git: skipping this one test loses a drift check, not the
+    differential guarantee.
+    """
+    from_git = _git_show_baseline()
+    if from_git is None:
+        pytest.skip(
+            f"git history for {BASELINE_COMMIT} unavailable; the frozen "
+            "snapshot is authoritative and every differential test still ran"
+        )
+
+    frozen = BASELINE_SNAPSHOT_PATH.read_text(encoding="utf-8")
+    assert frozen == from_git, (
+        f"{BASELINE_SNAPSHOT_PATH.name} has drifted from "
+        f"`git show {BASELINE_COMMIT}:breeding_core.py`. The frozen copy must "
+        "be a byte-for-byte snapshot of the baseline commit."
+    )
