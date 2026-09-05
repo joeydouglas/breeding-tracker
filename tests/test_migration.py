@@ -552,3 +552,300 @@ class TestStateIsPersistedIncrementally:
         assert report.repos["alpha"]["status"] == "skipped"
         assert report.repos["beta"]["status"] == "success"
         assert _remote_head_sha(remote_a) == alpha_sha
+
+
+# --------------------------- code-quality review round 3 (migration.py) ----
+
+
+def _porcelain(local):
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(local),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+class TestCommitStrandingIsDetected:
+    """Review finding (Critical): if `git add`/`git commit` fails AFTER
+    apply_new_fields has already rewritten the files on disk, the run is
+    correctly reported failed -- but the rewritten files stay UNCOMMITTED in
+    the working tree. On retry, apply_new_fields sees the files already
+    match the template (changed=False), so no commit and no push is
+    attempted (local HEAD already equals the remote tip from before), and
+    the run records status=success with the edits never having been
+    committed or pushed. They sit as permanent uncommitted local changes and
+    the repo is marked migrated forever. Same class as the push-stranding
+    bug, one step earlier in the same function."""
+
+    def test_retry_after_commit_failure_actually_commits_and_pushes(
+        self, tmp_path, monkeypatch
+    ):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "commitstrand", "cross_name: CommitStrand\n"
+        )
+        state = tmp_path / "state.json"
+        registry = [{"name": "commitstrand", "path": str(local)}]
+
+        import migration as migration_module
+
+        real_git = migration_module._git
+
+        def fail_on_commit(args, cwd):
+            if args and args[0] == "commit":
+                raise subprocess.CalledProcessError(1, ["git", *args])
+            return real_git(args, cwd)
+
+        monkeypatch.setattr(migration_module, "_git", fail_on_commit)
+        report1 = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+        assert report1.repos["commitstrand"]["status"] == "failed"
+
+        # Commit works again. The retry must NOT record success while the
+        # migration's edits are still sitting uncommitted/unpushed.
+        monkeypatch.setattr(migration_module, "_git", real_git)
+        report2 = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report2.repos["commitstrand"]["status"] == "success"
+        content = _clone_and_read(remote, tmp_path / "verify-clone")
+        assert "auto_create: false" in content, (
+            "recorded success but the migrated fields never reached the remote"
+        )
+
+    def test_uncommitted_migration_edits_are_never_recorded_as_success(
+        self, tmp_path, monkeypatch
+    ):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "dirtyskip", "cross_name: DirtySkip\n"
+        )
+        state = tmp_path / "state.json"
+        registry = [{"name": "dirtyskip", "path": str(local)}]
+
+        import migration as migration_module
+
+        real_git = migration_module._git
+
+        def fail_on_commit(args, cwd):
+            if args and args[0] == "commit":
+                raise subprocess.CalledProcessError(1, ["git", *args])
+            return real_git(args, cwd)
+
+        monkeypatch.setattr(migration_module, "_git", fail_on_commit)
+        run_migration_across_repos(PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state)
+
+        # Simulate the retry seeing an already-template-matching file while
+        # the edits remain uncommitted: hand-apply the fields and leave them
+        # dirty, then run with commit still broken.
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+        if report.repos["dirtyskip"]["status"] == "success":
+            assert _porcelain(local) == "", (
+                "recorded success while migration-managed paths were still "
+                "dirty in the working tree"
+            )
+
+
+class TestFailurePathsAreIsolatedToOneRepo:
+    """Review finding: three unhandled exception paths in
+    run_migration_across_repos abort the ENTIRE batch instead of isolating
+    the failure to one repo."""
+
+    def test_registry_entry_missing_name_does_not_abort_the_batch(self, tmp_path):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "ok", "cross_name: Ok\n"
+        )
+        state = tmp_path / "state.json"
+        registry = [
+            {"path": str(tmp_path / "nameless")},  # no "name" key
+            {"name": "ok", "path": str(local)},
+        ]
+
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["ok"]["status"] == "success", (
+            "a malformed registry entry must not prevent valid repos from "
+            "migrating"
+        )
+        assert report.failed, "the malformed entry must be reported as failed"
+
+    def test_registry_entry_missing_path_does_not_abort_the_batch(self, tmp_path):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "ok2", "cross_name: Ok2\n"
+        )
+        state = tmp_path / "state.json"
+        registry = [
+            {"name": "pathless"},  # no "path" key
+            {"name": "ok2", "path": str(local)},
+        ]
+
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["ok2"]["status"] == "success"
+        assert report.repos["pathless"]["status"] == "failed"
+
+    def test_corrupt_state_file_does_not_brick_every_future_run(self, tmp_path):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "recover", "cross_name: Recover\n"
+        )
+        state = tmp_path / "state.json"
+        state.write_text("{ this is not json", encoding="utf-8")
+        registry = [{"name": "recover", "path": str(local)}]
+
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["recover"]["status"] == "success", (
+            "a truncated/corrupt state file must degrade to an empty state, "
+            "not raise JSONDecodeError before the loop even starts"
+        )
+        persisted = json.loads(state.read_text(encoding="utf-8"))
+        assert persisted["repos"]["recover"]["status"] == "success"
+
+    def test_missing_state_parent_directory_is_created(self, tmp_path):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "mkdirs", "cross_name: Mkdirs\n"
+        )
+        state = tmp_path / "nested" / "deeper" / "state.json"
+        registry = [{"name": "mkdirs", "path": str(local)}]
+
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["mkdirs"]["status"] == "success"
+        assert state.exists(), (
+            "the first _save_state after a successful migration raised "
+            "FileNotFoundError, losing that repo's record"
+        )
+
+
+class TestDetachedHeadIsAHardFailure:
+    """Review finding: `git rev-parse --abbrev-ref HEAD` returns the literal
+    string 'HEAD' on a detached HEAD, which then became the push TARGET
+    (`push origin HEAD:refs/heads/HEAD`) -- creating a garbage branch on the
+    remote while reporting success, and never reaching the real branch."""
+
+    def test_detached_head_repo_is_reported_failed(self, tmp_path):
+        local, remote = _init_repo_with_remote(
+            tmp_path, "detached", "cross_name: Detached\n"
+        )
+        _git(["checkout", "-q", "--detach", "HEAD"], local)
+
+        state = tmp_path / "state.json"
+        registry = [{"name": "detached", "path": str(local)}]
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["detached"]["status"] == "failed"
+        assert _remote_refs(remote).count("refs/heads/HEAD") == 0, (
+            "a detached HEAD must never be pushed to a literal "
+            "refs/heads/HEAD garbage branch"
+        )
+
+    def test_detached_head_does_not_abort_other_repos(self, tmp_path):
+        local_bad, remote_bad = _init_repo_with_remote(
+            tmp_path, "det2", "cross_name: Det2\n"
+        )
+        _git(["checkout", "-q", "--detach", "HEAD"], local_bad)
+        local_good, remote_good = _init_repo_with_remote(
+            tmp_path, "good2", "cross_name: Good2\n"
+        )
+
+        state = tmp_path / "state.json"
+        registry = [
+            {"name": "det2", "path": str(local_bad)},
+            {"name": "good2", "path": str(local_good)},
+        ]
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["det2"]["status"] == "failed"
+        assert report.repos["good2"]["status"] == "success"
+
+
+class TestFailureRollsBackAndReportsTouchedPaths:
+    """Review finding: every failure path left the working tree dirty with
+    half-applied edits and no rollback, and the failure report's
+    added_fields was hardcoded to {} -- discarding what was actually touched
+    before the failure. A dirty tree also collides with the next run or a
+    human/data-api `git pull`."""
+
+    def test_failed_run_leaves_no_dirty_migration_paths(self, tmp_path, monkeypatch):
+        local, remote = _init_repo_with_remote(
+            tmp_path,
+            "rollback",
+            "cross_name: Rollback\n",
+            plant_files=[("Rb01.md", "id: Rb01\n")],
+        )
+        state = tmp_path / "state.json"
+        registry = [{"name": "rollback", "path": str(local)}]
+
+        import migration as migration_module
+
+        real_git = migration_module._git
+
+        def fail_on_commit(args, cwd):
+            if args and args[0] == "commit":
+                raise subprocess.CalledProcessError(1, ["git", *args])
+            return real_git(args, cwd)
+
+        monkeypatch.setattr(migration_module, "_git", fail_on_commit)
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        assert report.repos["rollback"]["status"] == "failed"
+        assert _porcelain(local) == "", (
+            "a failed migration must roll its own half-applied edits back, "
+            "not leave the working tree dirty for the next run or a git pull"
+        )
+
+    def test_failure_report_names_the_paths_actually_touched(
+        self, tmp_path, monkeypatch
+    ):
+        local, remote = _init_repo_with_remote(
+            tmp_path,
+            "touched",
+            "cross_name: Touched\n",
+            plant_files=[("Tc01.md", "id: Tc01\n")],
+        )
+        state = tmp_path / "state.json"
+        registry = [{"name": "touched", "path": str(local)}]
+
+        import migration as migration_module
+
+        real_git = migration_module._git
+
+        def fail_on_commit(args, cwd):
+            if args and args[0] == "commit":
+                raise subprocess.CalledProcessError(1, ["git", *args])
+            return real_git(args, cwd)
+
+        monkeypatch.setattr(migration_module, "_git", fail_on_commit)
+        report = run_migration_across_repos(
+            PROJECT_TEMPLATE, PLANT_TEMPLATE, registry, state
+        )
+
+        touched = report.repos["touched"]["added_fields"]
+        assert touched, (
+            "the failure report discarded which paths/fields were touched "
+            "before the failure"
+        )
+        assert set(touched) == {"project.md", "plants/Tc01.md"}
+        assert "auto_create" in touched["project.md"]
+
+        persisted = json.loads(state.read_text(encoding="utf-8"))
+        assert persisted["repos"]["touched"]["added_fields"] == touched

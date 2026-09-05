@@ -32,9 +32,25 @@ import project_markdown
 __all__ = [
     "MigrationResult",
     "MigrationReport",
+    "RepoMigrationError",
     "apply_new_fields",
     "run_migration_across_repos",
 ]
+
+
+class RepoMigrationError(Exception):
+    """One repo's migration failed, carrying what it had already touched.
+
+    The failure report used to hardcode ``added_fields={}``, discarding the
+    information about which files/fields this run had actually rewritten
+    before the failure -- exactly the information a human needs to work out
+    what state the repo was left in. Raising this instead keeps the partial
+    result attached to the failure.
+    """
+
+    def __init__(self, message: str, added_fields: dict[str, list[str]] | None = None):
+        super().__init__(message)
+        self.added_fields = added_fields or {}
 
 
 class MigrationResult:
@@ -156,8 +172,77 @@ def _remote_sha(repo_path: Path, branch: str) -> str | None:
     return line.split()[0]
 
 
+def _managed_paths(repo_path: Path) -> list[str]:
+    """Every repo-relative path this migration is allowed to touch.
+
+    Used for the post-run cleanliness check: "the local file already matches
+    the template" must never be conflated with "this repo's edits were
+    committed". A file left dirty here means a previous run rewrote it and
+    never got it committed, so the migration is NOT done.
+    """
+    paths: list[str] = []
+    if (repo_path / "project.md").exists():
+        paths.append("project.md")
+    plants_dir = repo_path / "plants"
+    if plants_dir.is_dir():
+        paths.extend(f"plants/{p.name}" for p in sorted(plants_dir.glob("*.md")))
+    return paths
+
+
+def _porcelain_status(repo_path: Path, paths: Sequence[str]) -> str:
+    """``git status --porcelain`` restricted to ``paths`` (empty == clean)."""
+    if not paths:
+        return ""
+    result = _git(["status", "--porcelain", "--", *paths], repo_path)
+    return result.stdout.strip()
+
+
+def _rollback(repo_path: Path, paths: Sequence[str]) -> None:
+    """Best-effort restore of ``paths`` to HEAD after a failed migration.
+
+    Without this, every failure path left half-applied edits dirty in the
+    working tree: the next run (or a human/data-api's ``git pull``) collides
+    with them, and the very next ``apply_new_fields`` sees a file that
+    already matches the template and reports nothing to do. Best-effort by
+    design -- a rollback that itself fails must not mask the original
+    failure being reported.
+    """
+    for relative_path in paths:
+        for args in (
+            ["reset", "-q", "HEAD", "--", relative_path],
+            ["checkout", "--", relative_path],
+        ):
+            try:
+                _git(args, repo_path)
+            except Exception:  # noqa: BLE001 - never mask the real failure
+                pass
+
+
 def _migrate_one_repo(
     project_template: str | Path, plant_template: str | Path, repo_path: Path
+) -> dict[str, list[str]]:
+    """Apply both templates to one repo, rolling back on any failure.
+
+    Wraps :func:`_migrate_one_repo_unguarded` so that a failure anywhere in
+    the sequence (a) reverts the migration's own half-applied edits and
+    (b) reports which paths/fields had been touched before it failed.
+    """
+    touched: dict[str, list[str]] = {}
+    try:
+        return _migrate_one_repo_unguarded(
+            project_template, plant_template, repo_path, touched
+        )
+    except Exception as exc:  # noqa: BLE001 - re-raised, enriched, below
+        if repo_path.is_dir():
+            _rollback(repo_path, sorted(touched))
+        raise RepoMigrationError(str(exc) or exc.__class__.__name__, touched) from exc
+
+
+def _migrate_one_repo_unguarded(
+    project_template: str | Path,
+    plant_template: str | Path,
+    repo_path: Path,
+    added_fields: dict[str, list[str]],
 ) -> dict[str, list[str]]:
     """Apply both templates to one repo's ``project.md`` and ``plants/*.md``.
 
@@ -177,8 +262,6 @@ def _migrate_one_repo(
     """
     if not repo_path.is_dir():
         raise FileNotFoundError(f"repo path does not exist: {repo_path}")
-
-    added_fields: dict[str, list[str]] = {}
 
     project_file = repo_path / "project.md"
     if project_file.exists():
@@ -213,12 +296,65 @@ def _migrate_one_repo(
             repo_path,
         )
 
+    # Commit-stranding guard. If a PREVIOUS run's `git add`/`git commit`
+    # failed after apply_new_fields had already rewritten the files, those
+    # edits sit uncommitted in the working tree. On this run
+    # apply_new_fields reports changed=False (the file already matches the
+    # template), so nothing above would commit or push them, and local HEAD
+    # still equals the remote tip -- the repo would be recorded as
+    # successfully migrated with its edits never committed anywhere. Any
+    # dirtiness in the migration-managed paths is therefore a failure
+    # requiring a commit+push retry, never a skip-as-already-done.
+    managed = _managed_paths(repo_path)
+    dirty = _porcelain_status(repo_path, managed)
+    if dirty:
+        if not added_fields:
+            # Recover the stranded edits: commit exactly the managed paths
+            # that are dirty, then fall through to the normal push check.
+            dirty_paths = sorted(
+                {line[3:].strip().strip('"') for line in dirty.splitlines()}
+            )
+            for relative_path in dirty_paths:
+                _git(["add", "--", relative_path], repo_path)
+            _git(
+                [
+                    "commit",
+                    "-q",
+                    "-m",
+                    "chore: migrate to latest template fields",
+                    "--only",
+                    "--",
+                    *dirty_paths,
+                ],
+                repo_path,
+            )
+            for relative_path in dirty_paths:
+                added_fields.setdefault(relative_path, [])
+        still_dirty = _porcelain_status(repo_path, managed)
+        if still_dirty:
+            raise RuntimeError(
+                "migration-managed paths are still uncommitted after the "
+                f"commit step -- refusing to record this repo as migrated: "
+                f"{still_dirty}"
+            )
+
     if not _has_origin(repo_path):
         # A local-only clone has nothing to push to; the commit above is the
         # whole migration.
         return added_fields
 
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_path).stdout.strip()
+    if branch == "HEAD":
+        # Detached HEAD: `rev-parse --abbrev-ref HEAD` yields the literal
+        # string "HEAD", which would previously be used as the push TARGET
+        # (`push origin HEAD:refs/heads/HEAD`), creating a garbage branch on
+        # the remote while reporting success and never reaching the real
+        # branch. There is no correct branch to infer here, so this is a
+        # hard failure for this repo.
+        raise RuntimeError(
+            f"{repo_path} is on a detached HEAD; refusing to push to a "
+            "literal refs/heads/HEAD branch"
+        )
     local_head = _git(["rev-parse", "HEAD"], repo_path).stdout.strip()
 
     if _remote_sha(repo_path, branch) == local_head:
@@ -236,12 +372,32 @@ def _migrate_one_repo(
 
 
 def _load_state(state_path: Path) -> dict:
-    if state_path.exists():
-        return json.loads(state_path.read_text(encoding="utf-8"))
-    return {"repos": {}}
+    """Load the resume state, degrading to an empty state if it's unusable.
+
+    A truncated/corrupt state file (an interrupted write, a bad hand-edit)
+    used to raise ``JSONDecodeError`` before the registry loop even started,
+    bricking EVERY future run of the migration rather than one repo's.
+    Losing the resume record costs at worst some idempotent re-work: every
+    step below is safe to repeat. Crashing costs the whole migration.
+    """
+    if not state_path.exists():
+        return {"repos": {}}
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return {"repos": {}}
+    if not isinstance(state, dict) or not isinstance(state.get("repos"), dict):
+        return {"repos": {}}
+    return state
 
 
 def _save_state(state_path: Path, state: dict) -> None:
+    # The state file's parent may not exist yet (a caller pointing at
+    # e.g. ~/.cache/breeding/migration-state.json on a fresh machine).
+    # Without this, the FIRST save -- which happens only AFTER a repo has
+    # already been migrated and pushed -- raised FileNotFoundError, losing
+    # that repo's record and aborting the whole batch.
+    state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
         json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -275,9 +431,39 @@ def run_migration_across_repos(
 
     report = MigrationReport()
 
-    for entry in registry:
-        name = entry["name"]
-        repo_path = Path(entry["path"])
+    for index, entry in enumerate(registry):
+        # Per-entry validation lives INSIDE the loop's failure handling: a
+        # registry entry missing "name"/"path" used to raise a bare KeyError
+        # from OUTSIDE the try block, aborting the entire batch over one
+        # malformed line of config instead of isolating it to that entry.
+        name = entry.get("name") if isinstance(entry, Mapping) else None
+        if not isinstance(name, str) or not name:
+            name = f"<malformed registry entry #{index}>"
+            report.repos[name] = {
+                "status": "failed",
+                "error": f"registry entry #{index} has no usable 'name': {entry!r}",
+                "added_fields": {},
+            }
+            continue
+
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, (str, Path)) or not raw_path:
+            error = f"registry entry {name!r} has no usable 'path': {entry!r}"
+            state["repos"][name] = {
+                "status": "failed",
+                "error": error,
+                "template_version": None,
+                "added_fields": {},
+            }
+            report.repos[name] = {
+                "status": "failed",
+                "error": error,
+                "added_fields": {},
+            }
+            _save_state(state_path, state)
+            continue
+
+        repo_path = Path(raw_path)
         prior = state["repos"].get(name)
 
         if (
@@ -295,16 +481,19 @@ def run_migration_across_repos(
         try:
             added_fields = _migrate_one_repo(project_template, plant_template, repo_path)
         except Exception as exc:  # noqa: BLE001 - one repo's failure must not abort the batch
+            # Report what this run actually touched before failing, rather
+            # than a hardcoded {} that discards it.
+            touched = getattr(exc, "added_fields", {}) or {}
             state["repos"][name] = {
                 "status": "failed",
                 "error": str(exc),
                 "template_version": prior.get("template_version") if prior else None,
-                "added_fields": {},
+                "added_fields": touched,
             }
             report.repos[name] = {
                 "status": "failed",
                 "error": str(exc),
-                "added_fields": {},
+                "added_fields": touched,
             }
             _save_state(state_path, state)
             continue
