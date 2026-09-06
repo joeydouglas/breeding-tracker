@@ -21,9 +21,11 @@ Three things the Task 3.0 field inventory flagged, all handled here:
   from the template's declared defaults rather than assumed present (§9.3).
 
 "Zero data loss" is not asserted, it is *verified*: :func:`verify_migration`
-re-reads every written file and compares it back against the original JSON,
-returning a structured report that must be empty for the migration to be
-accepted.
+re-reads every written file and compares it back against the original JSON
+**and the registry entry** (the registry-sourced routing fields have no
+tracker counterpart to diff against, so a tracker-only verification is blind
+to them), returning a structured report that must be empty for the migration
+to be accepted.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ __all__ = [
     "TrackerMigrationError",
     "MigrationSummary",
     "VerificationReport",
+    "REGISTRY_SOURCED_FIELDS",
     "assert_sandbox_destination",
     "load_registry_entry",
     "build_project_record",
@@ -57,6 +60,12 @@ PROJECT_BODY_FIELD = "body"
 
 #: The tracker key holding the plant array; never a project frontmatter field.
 PLANTS_KEY = "plants"
+
+#: Project frontmatter fields whose value comes from ``registry.json``, never
+#: from ``tracker.json`` (Task 3.0 §8). Declared once and consumed by both
+#: :func:`build_project_record` and :func:`verify_migration` so the writer and
+#: the verifier cannot drift apart about which fields the registry owns.
+REGISTRY_SOURCED_FIELDS = ("auto_create", "plant_id_prefixes")
 
 
 class TrackerMigrationError(Exception):
@@ -313,7 +322,7 @@ def build_project_record(
     """
     record = {k: v for k, v in tracker.items() if k != PLANTS_KEY}
 
-    for field in ("auto_create", "plant_id_prefixes"):
+    for field in REGISTRY_SOURCED_FIELDS:
         if field not in registry_entry:
             raise TrackerMigrationError(
                 f"registry entry for {registry_entry.get('slug')!r} is missing "
@@ -504,6 +513,8 @@ def verify_migration(
     output_dir: str | Path,
     project_template: str | Path,
     plant_template: str | Path,
+    registry_path: str | Path,
+    slug: str,
 ) -> VerificationReport:
     """Re-read the migrated tree and diff it against the source JSON.
 
@@ -515,10 +526,28 @@ def verify_migration(
     The returned report counts the records and field values it compared, and
     :attr:`VerificationReport.ok` is False when that count is zero: "found no
     discrepancy" is only meaningful if something was actually inspected.
+
+    ``registry_path``/``slug`` are **required**, not optional. The tracker is
+    not the whole source: ``auto_create`` and ``plant_id_prefixes`` exist only
+    in ``registry.json`` (Task 3.0 §8), so a verification driven by the
+    tracker alone never looks at them and would pass a project.md whose
+    routing fields silently carried the template defaults (``false``/``[]``) —
+    exactly the failure :func:`build_project_record` exists to prevent, and
+    exactly the one that breaks ID routing in production. Defaulting them
+    would re-open that blind spot for any caller who omits them, so the
+    signature makes the registry non-optional.
     """
     tracker = _read_json(tracker_path)
     target = Path(output_dir)
     report = VerificationReport()
+
+    registry_entry = load_registry_entry(registry_path, slug)
+    for field in REGISTRY_SOURCED_FIELDS:
+        if field not in registry_entry:
+            raise TrackerMigrationError(
+                f"registry entry for {slug!r} is missing {field!r}; cannot "
+                "verify the migrated routing fields against it"
+            )
 
     project_schema = project_markdown.load_schema(project_template)
     plant_schema = plant_markdown.load_schema(plant_template)
@@ -528,12 +557,14 @@ def verify_migration(
         report.missing_records.append("project")
     else:
         got = project_markdown.read_project(project_file, schema=project_schema)
-        _diff_record(
-            "project",
-            {k: v for k, v in tracker.items() if k != PLANTS_KEY},
-            got,
-            report,
-        )
+        expected_project = {k: v for k, v in tracker.items() if k != PLANTS_KEY}
+        # Registry values override any same-named tracker key, mirroring
+        # build_project_record exactly: the registry is the routing source of
+        # truth on the way in, so it must be the source of truth on the way
+        # back out too.
+        for field in REGISTRY_SOURCED_FIELDS:
+            expected_project[field] = registry_entry[field]
+        _diff_record("project", expected_project, got, report)
 
     plants = _plants_of(tracker)
     report.plant_count_source = len(plants)

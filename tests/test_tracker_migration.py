@@ -28,6 +28,7 @@ from tracker_migration import (
 REPO = Path(__file__).resolve().parents[1]
 PROJECT_TEMPLATE = REPO / "templates" / "project-template.md"
 PLANT_TEMPLATE = REPO / "templates" / "plant-template.md"
+SLUG = "test-cross"
 
 
 # ------------------------------------------------------------- fixtures ----
@@ -115,7 +116,9 @@ def test_round_trip_has_zero_data_loss(inputs, tmp_path):
     out = tmp_path / "sandbox" / "test-cross"
     _run(tracker_path, registry_path, out)
 
-    report = verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
 
     assert report.ok, report.as_dict()
     assert report.plant_count_source == report.plant_count_migrated == 1
@@ -257,7 +260,7 @@ def test_defaulted_fields_are_not_reported_as_data_loss(tmp_path):
     _run(tracker_path, registry_path, out)
 
     assert verify_migration(
-        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
     ).ok
 
 
@@ -446,7 +449,9 @@ def test_verify_detects_a_deleted_plant_file(inputs, tmp_path):
     _run(tracker_path, registry_path, out)
     (out / "plants" / "TT01.md").unlink()
 
-    report = verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
     assert not report.ok
     assert report.missing_records == ["TT01"]
     assert not report.plant_count_matches
@@ -458,7 +463,9 @@ def test_verify_detects_a_missing_project_file(inputs, tmp_path):
     _run(tracker_path, registry_path, out)
     (out / "project.md").unlink()
 
-    report = verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
     assert not report.ok
     assert "project" in report.missing_records
 
@@ -473,7 +480,9 @@ def test_verify_detects_a_tampered_field_value(inputs, tmp_path):
         encoding="utf-8",
     )
 
-    report = verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
     assert not report.ok
     assert report.changed_fields["TT01"][0]["field"] == "status"
 
@@ -484,7 +493,9 @@ def test_verify_detects_an_extra_unexpected_plant_file(inputs, tmp_path):
     _run(tracker_path, registry_path, out)
     (out / "plants" / "TT99.md").write_text("---\nid: TT99\n---\n", encoding="utf-8")
 
-    report = verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
     assert not report.ok
     assert report.extra_records == ["TT99"]
 
@@ -494,7 +505,7 @@ def test_verify_reports_an_ok_dict_shape(inputs, tmp_path):
     out = tmp_path / "sandbox"
     _run(tracker_path, registry_path, out)
     data = verify_migration(
-        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
     ).as_dict()
     assert data["ok"] is True
     assert set(data) == {
@@ -580,7 +591,7 @@ def test_migration_runs_with_subprocess_and_network_disabled(
     summary = _run(tracker_path, registry_path, out)
     assert summary.plant_count == 1
     assert verify_migration(
-        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
     ).ok
 
 
@@ -636,35 +647,62 @@ def test_verification_reports_how_many_records_and_fields_it_compared(
     out = tmp_path / "sandbox"
     _run(tracker_path, registry_path, out)
 
-    report = verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
 
     assert report.ok, report.as_dict()
     # 1 project record + 1 plant record.
     assert report.records_compared == 2
-    # 8 project fields (9 tracker keys minus 'plants') + 9 plant fields.
-    assert report.fields_compared == 17
+    # 8 project tracker fields (9 keys minus 'plants') + 2 registry-sourced
+    # routing fields + 9 plant fields.
+    assert report.fields_compared == 19
 
 
 def test_verification_that_compared_nothing_is_not_ok(tmp_path):
-    """A vacuous pass must be reported as a failure, not as success."""
+    """A vacuous pass must be reported as a failure, not as success.
+
+    An empty tracker is no longer vacuous on its own: the two registry-sourced
+    routing fields are always compared, which is the point of the fix. The
+    genuinely blind case is a tree with nothing to re-read at all.
+    """
     tracker_path, registry_path = _write_inputs(tmp_path, {"plants": []})
     out = tmp_path / "sandbox"
     _run(tracker_path, registry_path, out)
+    (out / "project.md").unlink()
 
-    report = verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
 
     assert report.fields_compared == 0
     assert not report.ok, "a verification that compared no field value is blind"
     assert not report.verified_something
 
 
+def test_an_empty_tracker_still_verifies_the_registry_routing_fields(tmp_path):
+    """Even with zero plants, auto_create/plant_id_prefixes are checked."""
+    tracker_path, registry_path = _write_inputs(tmp_path, {"plants": []})
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
+
+    assert report.fields_compared == 2
+    assert report.ok, report.as_dict()
+
+
 def test_verification_of_an_unwritten_tree_is_not_silently_ok(inputs, tmp_path):
     """Pointing the gate at a directory no migration wrote must fail loudly."""
-    tracker_path, _ = inputs
+    tracker_path, registry_path = inputs
     empty = tmp_path / "never-migrated"
     empty.mkdir()
 
-    report = verify_migration(tracker_path, empty, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+    report = verify_migration(
+        tracker_path, empty, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
 
     assert not report.ok
     assert report.fields_compared == 0
@@ -676,10 +714,10 @@ def test_verification_counts_appear_in_the_report_dict(inputs, tmp_path):
     out = tmp_path / "sandbox"
     _run(tracker_path, registry_path, out)
     data = verify_migration(
-        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
     ).as_dict()
     assert data["records_compared"] == 2
-    assert data["fields_compared"] == 17
+    assert data["fields_compared"] == 19
 
 
 # ---------------------------------------- rollback on a mid-write failure ----
@@ -798,3 +836,163 @@ def test_successful_migration_is_untouched_by_the_rollback_guard(inputs, tmp_pat
     assert summary.plant_count == 1
     assert (out / "project.md").is_file()
     assert (out / "plants" / "TT01.md").is_file()
+
+
+# ------------------------- verification of registry-sourced routing fields ----
+#
+# Code-quality round 5: `verify_migration` diffed the migrated project.md
+# against `tracker.json` alone. But `auto_create` and `plant_id_prefixes` do
+# not exist in any tracker (Task 3.0 §8) -- they are read from `registry.json`
+# by `build_project_record`. Fields absent from the source are treated as
+# additions, not loss, so the two fields whose whole reason for existing is
+# that they can't be sourced from the tracker were the two fields the
+# zero-data-loss gate never looked at. A project.md carrying the template
+# defaults (false / []) -- which silently breaks ID routing and auto-create in
+# production, the exact failure `build_project_record` raises to prevent --
+# passed verification with ok=True.
+
+
+def test_verify_detects_a_tampered_auto_create(inputs, tmp_path):
+    """The reviewer's repro: flip auto_create in project.md; gate must fail."""
+    tracker_path, registry_path = inputs
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+    pf = out / "project.md"
+    pf.write_text(
+        pf.read_text(encoding="utf-8").replace(
+            "auto_create: true", "auto_create: false"
+        ),
+        encoding="utf-8",
+    )
+
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
+
+    assert not report.ok, "auto_create was flipped but verification passed"
+    changed = {c["field"] for c in report.changed_fields["project"]}
+    assert "auto_create" in changed
+
+
+def test_verify_detects_tampered_plant_id_prefixes(inputs, tmp_path):
+    """Blanking the routing prefixes to the template default must fail."""
+    import re
+
+    tracker_path, registry_path = inputs
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+    pf = out / "project.md"
+    pf.write_text(
+        re.sub(
+            r"plant_id_prefixes:\n(?:- .*\n|  .*\n)+",
+            "plant_id_prefixes: []\n",
+            pf.read_text(encoding="utf-8"),
+        ),
+        encoding="utf-8",
+    )
+
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
+
+    assert not report.ok, "plant_id_prefixes was blanked but verification passed"
+    changed = {c["field"] for c in report.changed_fields["project"]}
+    assert "plant_id_prefixes" in changed
+
+
+def test_verify_detects_a_dropped_routing_field(inputs, tmp_path):
+    """A routing field missing from project.md entirely is loss, not silence."""
+    tracker_path, registry_path = inputs
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+    pf = out / "project.md"
+    pf.write_text(
+        "".join(
+            line
+            for line in pf.read_text(encoding="utf-8").splitlines(keepends=True)
+            if not line.startswith("auto_create:")
+        ),
+        encoding="utf-8",
+    )
+
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
+
+    assert not report.ok
+    assert "auto_create" in report.lost_fields.get(
+        "project", []
+    ) or "auto_create" in {c["field"] for c in report.changed_fields.get("project", [])}
+
+
+def test_verify_compares_routing_fields_against_registry_not_tracker(tmp_path):
+    """A tracker key of the same name must not be able to satisfy the gate.
+
+    The registry is the routing source of truth on the way in, so it must be
+    the source of truth on the way back out. A tracker that happens to carry a
+    stale `auto_create` must not let a migrated file matching *that* value pass.
+    """
+    tracker = _tracker()
+    tracker["auto_create"] = False  # stale/wrong value living in the tracker
+    tracker_path, registry_path = _write_inputs(tmp_path, tracker)  # registry: True
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+
+    report = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
+
+    # The migration wrote the registry value (True); verifying against the
+    # tracker's False would report a bogus discrepancy.
+    assert report.ok, report.as_dict()
+
+    pf = out / "project.md"
+    pf.write_text(
+        pf.read_text(encoding="utf-8").replace(
+            "auto_create: true", "auto_create: false"
+        ),
+        encoding="utf-8",
+    )
+    tampered = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+    )
+    assert not tampered.ok, (
+        "matching the tracker's stale value must not satisfy the gate"
+    )
+
+
+def test_verify_requires_the_registry(inputs, tmp_path):
+    """The registry is not optional; omitting it must be a TypeError, not a pass."""
+    tracker_path, registry_path = inputs
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+
+    with pytest.raises(TypeError):
+        verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+
+
+def test_verify_aborts_when_the_registry_has_no_entry_for_the_slug(inputs, tmp_path):
+    tracker_path, registry_path = inputs
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+
+    with pytest.raises(TrackerMigrationError, match="no registry entry"):
+        verify_migration(
+            tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, "nope"
+        )
+
+
+def test_verify_aborts_when_the_registry_entry_lacks_a_routing_field(tmp_path):
+    """Never fall back to a template default while *verifying*, either."""
+    tracker_path, registry_path = _write_inputs(tmp_path, _tracker())
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+
+    registry = _registry()
+    del registry["projects"][0]["auto_create"]
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    with pytest.raises(TrackerMigrationError, match="auto_create"):
+        verify_migration(
+            tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, registry_path, SLUG
+        )

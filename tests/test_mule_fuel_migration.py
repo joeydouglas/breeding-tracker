@@ -156,8 +156,42 @@ def test_every_source_plant_id_has_exactly_one_markdown_file(migrated):
 @requires_real_data
 def test_full_verification_reports_zero_loss(migrated):
     _, out = migrated
-    report = verify_migration(TRACKER, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+    report = verify_migration(
+        TRACKER, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, REGISTRY, SLUG
+    )
     assert report.ok, json.dumps(report.as_dict(), indent=2, default=str)[:4000]
+
+
+@requires_real_data
+def test_verification_catches_defaulted_routing_fields_on_real_data(migrated):
+    """The real-data form of the round-5 blind spot.
+
+    Rewrite the migrated project.md's routing fields to the template defaults
+    -- what a migration that failed to consult registry.json would have
+    produced -- and require the gate to reject it.
+    """
+    import re
+
+    _, out = migrated
+    pf = out / "project.md"
+    original = pf.read_text(encoding="utf-8")
+    try:
+        broken = original.replace("auto_create: false", "auto_create: true")
+        broken = re.sub(
+            r"plant_id_prefixes:\n(?:- .*\n|  .*\n)+",
+            "plant_id_prefixes: []\n",
+            broken,
+        )
+        assert broken != original, "fixture did not actually change the file"
+        pf.write_text(broken, encoding="utf-8")
+        report = verify_migration(
+            TRACKER, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, REGISTRY, SLUG
+        )
+        assert not report.ok
+        changed = {c["field"] for c in report.changed_fields.get("project", [])}
+        assert "plant_id_prefixes" in changed
+    finally:
+        pf.write_text(original, encoding="utf-8")
 
 
 @requires_real_data

@@ -191,10 +191,16 @@ def main():
         # re-derived totals rather than trusted.
         from tracker_migration import verify_migration
 
-        report = verify_migration(TRACKER, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+        report = verify_migration(
+            TRACKER, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, REGISTRY, SLUG
+        )
         expected_records = 1 + len(source_plants)
-        expected_fields = fields_checked + len(
-            [k for k in source if k != "plants"]
+        expected_fields = (
+            fields_checked
+            + len([k for k in source if k != "plants"])
+            # auto_create + plant_id_prefixes exist only in registry.json and
+            # are compared in addition to every tracker key.
+            + 2
         )
         check(
             "verification report is not vacuous",
@@ -210,8 +216,74 @@ def main():
         check(
             "verification of a never-migrated dir is reported as NOT ok",
             not verify_migration(
-                TRACKER, Path(tmp) / "never-migrated", PROJECT_TEMPLATE, PLANT_TEMPLATE
+                TRACKER,
+                Path(tmp) / "never-migrated",
+                PROJECT_TEMPLATE,
+                PLANT_TEMPLATE,
+                REGISTRY,
+                SLUG,
             ).ok,
+        )
+
+        # --- the gate must see the registry-sourced routing fields -----------
+        # auto_create/plant_id_prefixes have no tracker counterpart, so a
+        # verification driven by tracker.json alone treats them as "not in the
+        # source" and never compares them: a project.md carrying the template
+        # defaults (false / []) -- which breaks ID routing in production --
+        # would pass. Each field is independently reverted to its template
+        # default here and the gate must reject the result.
+        import re as _re
+
+        project_md = out / "project.md"
+        pristine = project_md.read_text(encoding="utf-8")
+        tampers = {
+            "auto_create": pristine.replace(
+                f"auto_create: {str(entry['auto_create']).lower()}",
+                f"auto_create: {str(not entry['auto_create']).lower()}",
+            ),
+            "plant_id_prefixes": _re.sub(
+                r"plant_id_prefixes:\n(?:- .*\n|  .*\n)+",
+                "plant_id_prefixes: []\n",
+                pristine,
+            ),
+        }
+        try:
+            for field, broken in tampers.items():
+                if broken == pristine:
+                    check(f"tamper fixture actually modified {field}", False)
+                    continue
+                project_md.write_text(broken, encoding="utf-8")
+                tampered = verify_migration(
+                    TRACKER, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, REGISTRY, SLUG
+                )
+                flagged = field in {
+                    c["field"] for c in tampered.changed_fields.get("project", [])
+                }
+                check(
+                    f"verification rejects a {field} that no longer matches "
+                    "registry.json",
+                    (not tampered.ok) and flagged,
+                    f"ok={tampered.ok} flagged={flagged}",
+                )
+        finally:
+            project_md.write_text(pristine, encoding="utf-8")
+
+        check(
+            "restored project.md verifies clean again",
+            verify_migration(
+                TRACKER, out, PROJECT_TEMPLATE, PLANT_TEMPLATE, REGISTRY, SLUG
+            ).ok,
+        )
+
+        # The registry is not optional on the verification path: a caller that
+        # omits it must get an error, never a silently tracker-only pass.
+        try:
+            verify_migration(TRACKER, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+            registry_required = False
+        except TypeError:
+            registry_required = True
+        check(
+            "verify_migration cannot be called without the registry", registry_required
         )
 
         # --- a mid-write failure must leave nothing behind -------------------

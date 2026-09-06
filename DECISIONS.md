@@ -512,3 +512,57 @@ pass; `tracker.json` md5 `f55be8df99b8e94606c19b3730b830e4` unchanged and
 all 839 live paths unchanged.
 
 Final state: 356 tests, 100% green, zero warnings (`pytest -W error`).
+
+### Task 3.1 code-quality review round 5
+
+**`verify_migration` was blind to the two fields the migration exists to get
+right.** Round 4 fixed a *related* problem — the gate could pass vacuously
+after comparing nothing — but left the real gap open, and the counts it added
+actively disguised it: the report proudly stated "816 field values compared"
+while never once looking at `auto_create` or `plant_id_prefixes`.
+
+The mechanism: `verify_migration` diffed the migrated `project.md` against
+`tracker.json` alone. But those two fields do **not exist in any tracker**
+(Task 3.0 §8) — that is the entire reason `build_project_record` reads them
+from `registry.json` and refuses to run without an entry. And the verifier
+treats a field absent from the source as an *addition, not loss*. So the two
+fields whose defining property is "unobtainable from the tracker" were exactly
+the two fields the zero-data-loss gate never compared. A `project.md` carrying
+the template defaults (`false` / `[]`) — which silently breaks ID routing and
+auto-create in production, the precise failure `build_project_record` raises
+to prevent — verified `ok=True`. The gate failed toward "accept" on the one
+class of corruption it was written to catch.
+
+The fix makes the verifier read the same two sources the writer does.
+`verify_migration` now takes `registry_path` and `slug` and overlays the
+registry values onto the expected project record before diffing, mirroring
+`build_project_record` exactly (registry wins over any same-named tracker
+key, so a stale tracker value can't satisfy the gate). `REGISTRY_SOURCED_FIELDS`
+is declared once at module level and consumed by both the writer and the
+verifier, so the two cannot drift about which fields the registry owns.
+
+Three deliberate choices:
+
+* The new parameters are **required, not optional with a default**. A default
+  would re-open the identical blind spot for every caller who omits them, and
+  this is a gate whose failure mode is silent acceptance. Callers must supply
+  the registry; there is a test asserting the no-registry call is a `TypeError`.
+* Verification **re-validates the registry entry** (missing entry, or an entry
+  lacking a routing field, aborts). Falling back to a template default while
+  *verifying* would be the same bug in a different function.
+* `test_verification_that_compared_nothing_is_not_ok` was tightened: an empty
+  tracker no longer compares zero fields, because the two routing fields are
+  always checked. The genuinely blind case — nothing on disk to re-read — is
+  what it now exercises.
+
+Field counts rose by exactly 2 per project record, on synthetic (17 -> 19) and
+real data (816 -> 818), which is the fix's own evidence that the previously
+skipped fields are now inspected.
+
+`tools/verify_mule_fuel_migration.py` grew five checks that revert each routing
+field independently to its template default and require rejection, confirm the
+restored file verifies clean again, and confirm the registry cannot be omitted:
+29/29 pass against the real 45-plant tracker, md5
+`f55be8df99b8e94606c19b3730b830e4` unchanged, all 839 live paths unchanged.
+
+Final state: 365 tests, 100% green, zero warnings (`pytest -W error`).
