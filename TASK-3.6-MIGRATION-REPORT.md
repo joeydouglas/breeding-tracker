@@ -145,30 +145,46 @@ claimed as such:
 
 ## 4. Mutation testing — the new checks can actually fail
 
-Six mutants of the migration were run against the suite
-(`MUTANT=… pytest -p mutate`, an out-of-tree plugin in `/tmp/lantz-mutants/`
-that monkeypatches `tracker_migration`; **not committed**).
+The harness is now **committed** as `tools/mutation_test.py` (Tasks 3.1–3.5 each
+used a throwaway `/tmp` script that was deleted afterwards, which made the
+strongest evidence in the phase the one thing nobody could re-run). It is a
+pytest plugin and a runner in one file: `MUTANT=A pytest -p mutation_test`
+patches the migration in memory for a whole session, and
+`.venv/bin/python tools/mutation_test.py` re-runs the suite once per mutant and
+prints the kill table below, including which *project parametrizations* of the
+shared contract died. Mutants patch functions in memory only; no real tracker,
+registry or project directory is touched.
 
-| mutant | change | killed by |
-|---|---|---|
-| A | `corrected_reading` always materialised from the template default | 2 lantz tests + 4 contract instances, **`[lantz]` only** |
-| B | the correction copied onto every record | `test_corrected_reading_is_still_defaulted_on_the_other_three_plants` |
-| C | plant IDs upper-cased while writing | 8 lantz tests; contract `[lantz]` + `[spaced-paste]` |
-| D | plant IDs lower-cased while writing | 8 lantz tests; contract `[lantz]` + the four uppercase projects |
-| E | status re-inferred from the tab emoji | 2 lantz tests; contract `[lantz]` + `[paloma-coma]` |
-| F | a `defaulted_fields` entry emitted for every record | `test_ltz01_is_the_only_record_in_the_corpus_with_no_defaulted_fields` |
+Eleven mutants, **all killed** (a survivor would be a hole in the suite):
 
-Two results are the evidence for this project's uniqueness claims, rather than
+| mutant | change | killed by | contract parametrizations |
+|---|---|---|---|
+| A | `corrected_reading` always materialised from the template default | 6 tests | **`lantz` only** |
+| B | the one real correction copied onto every record | 5 tests | **`lantz` only** |
+| C | plant ID upper-cased in the FILENAME only | 74 tests | `lantz`, `spaced-paste` |
+| D | plant ID lower-cased in the FILENAME only | 116 tests | the four uppercase projects + `lantz` |
+| E | `status` re-inferred from the tab emoji | 11 tests | `lantz`, `paloma-coma` |
+| F | a `defaulted_fields` entry emitted for every record | 2 tests | — (both are `lantz` module tests) |
+| G | null-valued keys dropped instead of written as `field: null` | 12 tests | all six |
+| H | `''` coerced to `None` on write | 22 tests | `lantz`, `spaced-paste` |
+| I | routing compiled case-sensitively (no `re.IGNORECASE`) | 30 tests | all six |
+| J | registry-sourced `auto_create` falls back to the template default | 21 tests | the three discriminating projects |
+| K | plant IDs upper-cased in the record as well as the filename | 31 tests | `lantz`, `spaced-paste` |
+
+Three results are the evidence for this project's uniqueness claims, rather than
 an assertion in a docstring:
 
-- **Mutant A fails on the `[lantz]` parametrization only.** No earlier
+- **Mutants A and B fail on the `[lantz]` parametrization only.** No earlier
   project's data can distinguish "read the source field" from "always emit the
   default", because `null` is correct on all of them.
-- **Mutants C and D intersect on `lantz` alone.** Upper-casing is caught by
-  `{lantz, spaced-paste}`; lower-casing by `{lantz, mule-fuel,
+- **Mutants C and D intersect on `lantz` alone.** Filename upper-casing is
+  caught by `{lantz, spaced-paste}`; lower-casing by `{lantz, mule-fuel,
   honey-badger-haze, kibungan, paloma-coma}`. `lantz` is the only project in
   both sets — which is exactly the mixed-case claim, demonstrated rather than
   asserted.
+- **Mutant F dies on two tests, both in `test_lantz_migration.py`.** 94 of the
+  corpus's 95 plant records genuinely need a default, so Ltz01 is the only
+  record anywhere that can see this fault.
 
 ## 5. Acceptance criteria (c) and (d) — sandbox-only, no side effects
 
