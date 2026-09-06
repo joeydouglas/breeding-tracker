@@ -566,3 +566,72 @@ restored file verifies clean again, and confirm the registry cannot be omitted:
 `f55be8df99b8e94606c19b3730b830e4` unchanged, all 839 live paths unchanged.
 
 Final state: 365 tests, 100% green, zero warnings (`pytest -W error`).
+
+---
+
+## Task 3.2 — honey-badger-haze-pheno-hunt migration (sandbox-only)
+
+Second of six Task 3.x project migrations. **No production code was written or
+changed**: Task 3.1's `src/tracker_migration.py` was reused verbatim and
+`git diff src/` is empty for this commit. That is the deliverable's main
+claim — the tooling hardened over four review rounds on mule-fuel generalises
+to a second project rather than having been fitted to the first.
+
+Result: 23/23 plants, 414 plant field values + 11 project field values + 2
+registry-sourced routing fields, zero loss; tracker md5
+`eb23369faf136231e3a801eb5f99612a` unchanged; all 400 live paths unchanged;
+42/42 out-of-band checks pass; suite 365 -> 402.
+
+### The `auto_create` blind spot Task 3.1 could not have detected
+
+Task 3.0 §8's highest-risk finding is that `auto_create`/`plant_id_prefixes`
+live only in `registry.json`, and reading them from the tracker silently
+yields the template defaults (`false`/`[]`), breaking ID routing.
+
+mule-fuel's registry `auto_create` is `false` — **the same value as the
+template default**. So on Task 3.1's data, a migration that never opened
+`registry.json` would have produced a byte-identical `project.md` and passed
+every assertion, including the ones written specifically to prove the registry
+was consulted. Those assertions were true but not *discriminating*; the
+project's data could not tell the two implementations apart.
+
+This project's value is `true`, so it can. `test_auto_create_is_registry_true_
+and_not_the_template_default` pins all four facts at once: registry says
+`true`, template default is `false`, the tracker has no such key, and the
+migrated file says `true`. Confirmed by mutation — deleting the
+registry-override block from `build_project_record` fails this suite, while it
+would have passed Task 3.1's.
+
+**Lesson for the remaining four projects:** an assertion that a value came
+from source A is only evidence when A and the fallback disagree. Prefer
+projects/fixtures where they differ, and treat a passing check on data where
+they agree as untested, not proven.
+
+### A vacuous check caught in our own verifier
+
+The first draft of "the other 5 projects are untouched" compared
+`md5sum(f) == md5sum(f)` — the same expression twice, trivially true, and it
+printed PASS. This is precisely the failure class `VerificationReport`'s
+evidence counters exist to prevent, reproduced in the tool that was supposed
+to independently police the migration.
+
+Fixed by capturing sibling baselines *before* the migration runs, then
+comparing after. More importantly, the fix was validated with a **negative
+control**: a probe that perturbs a sibling tracker mid-run and confirms the
+check flips to FAIL (it did; the sibling was then restored byte- and
+mtime-identical). A green check that has never been observed to go red is not
+evidence.
+
+The same reasoning drove `test_verification_actually_compared_every_record_
+and_field`, which asserts the exact 24 records / 427 field values rather than
+trusting `report.ok`, and mutation-testing six injected faults against the new
+suite (registry bypass, regex backslash loss, null coercion, body truncation,
+dropped plant, dropped `notes_meta`) — all caught, source restored each time.
+
+### Preserving data that is known to be wrong
+
+This project's `notes_meta.migration_note` asserts "plants[] is intentionally
+empty", while 23 plants exist. The note is stale in the **source**. It is
+migrated verbatim: correcting or dropping prose during a migration is data
+loss, and it would hide the drift from the human who needs to see it. Flagged
+in the report, not fixed here. Migration preserves; it does not editorialise.
