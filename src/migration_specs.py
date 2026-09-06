@@ -184,7 +184,60 @@ PALOMA_COMA = ProjectSpec(
     ),
 )
 
-#: Every project whose migration has been accepted. Task 3.5 appends here.
-PROJECT_SPECS = [MULE_FUEL, HONEY_BADGER_HAZE, KIBUNGAN, PALOMA_COMA]
+SPACED_PASTE = ProjectSpec(
+    slug="spaced-paste",
+    plant_count=5,
+    project_keys=frozenset(
+        {
+            "created",
+            "cross_name",
+            "drive_folders",
+            "github_pages_url",
+            "github_repo",
+            "google_sheet_id",
+            "google_sheet_url",
+            "last_updated",
+            "notes_meta",
+            "plants",
+        }
+    ),
+    plant_keys=_COMMON_PLANT_KEYS,
+    expected_project_defaults=frozenset({"genetics", "breeder_lineage"}),
+    notes=(
+        "The FIRST project with a LOWERCASE plant-ID family: the prefix is "
+        "'sp' and the IDs are 'sp01'..'sp06', where every earlier project used "
+        "an uppercase prefix. Case is therefore load-bearing here in three "
+        "places no earlier project could exercise: the per-plant FILENAME "
+        "(sp01.md, which an ID upper-cased during migration renames while "
+        "every field still round-trips), the routing pattern (production "
+        "compiles with re.IGNORECASE, so a pattern that re-locked its own "
+        "case still routes the canonical spelling and drops the other half of "
+        "Discord's traffic), and the registry prefix itself. It is also the "
+        "SHORTEST prefix (2 chars) and the only one that is a common English "
+        "bigram, which makes the `\\b...\\b` boundary the sole thing stopping "
+        "'sp' from firing inside ordinary prose. "
+        "Second: the source `plants` array is NOT in ID order -- it is stored "
+        "sp06, sp01, sp02, sp03, sp05 -- the first project where the array's "
+        "order and the sorted-ID order differ, so a migration that rebuilt "
+        "records from a directory glob (which sorts) silently reorders the "
+        "roster while every field survives. "
+        "Third: `photos_drive_url` is the EMPTY STRING on all five plants -- "
+        "the first project where that is true of a PLANT field (kibungan had "
+        "it at project level on google_sheet_url), so a writer or reader "
+        "coercing '' to None loses it here and nowhere else. "
+        "Registry auto_create is false, which EQUALS the template default, so "
+        "like mule-fuel this project's routing-field assertions are true but "
+        "not discriminating for Task 3.0 §8. Unlike mule-fuel it DOES carry "
+        "notes_meta, so `genetics` and `breeder_lineage` are the only "
+        "defaulted project fields -- a combination no earlier project has. "
+        "Every plant carries all 18 keys, so corrected_reading must be the "
+        "ONLY defaulted plant field. IDs skip sp04. Nine of the ten nullable "
+        "plant fields are null on every plant; selection_notes is populated on "
+        "sp06 alone."
+    ),
+)
+
+#: Every project whose migration has been accepted. Task 3.6 appends here.
+PROJECT_SPECS = [MULE_FUEL, HONEY_BADGER_HAZE, KIBUNGAN, PALOMA_COMA, SPACED_PASTE]
 
 SPECS_BY_SLUG = {spec.slug: spec for spec in PROJECT_SPECS}

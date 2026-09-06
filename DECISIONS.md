@@ -934,3 +934,60 @@ directories are untouched.
 Final state: 606 tests (was 589), 100% green, zero warnings (`pytest -W error`);
 187/187 out-of-band checks across all five projects on a clean tree (was 171);
 `tracker.json` md5 `4e59e7b1896f885767824bbacbcef437` unchanged.
+
+## Task 3.5: the first migration that cost nothing but a spec
+
+`spaced-paste` is the first Task 3.x instance whose entire diff is **one
+`ProjectSpec` plus one per-project test module** — no production code, no
+shared-harness change, and no new check lifted into the contract. Tasks 3.1
+and 3.2 each cost ~1200 lines of duplicated test and tool; 3.3 and 3.4 each
+still moved harness code. That the fifth project needed neither is the
+harness's payoff, stated as an outcome rather than an intention.
+
+**Lowercase IDs are a real gap, not a cosmetic one.** Every earlier project's
+prefix is uppercase-initial (MG, HBH, PK/PL, PC, Ltz), so nothing in the corpus
+could distinguish an ID-normalising migration from a correct one. `sp01`..`sp06`
+makes case load-bearing in the per-plant **filename** — and that is the subtle
+part: every shared field check locates a record by building
+`plants/<id>.md`, so on a case-insensitive filesystem an upper-cased roster
+answers to the same paths and passes the entire shared field-diff while
+producing a tree that no longer matches the source on a case-sensitive one.
+The check therefore compares against the real directory listing, not against a
+constructed path. Mutation-confirmed: upper-casing `_plant_id` kills 11 of this
+module's tests.
+
+**Sorted source arrays were hiding a positional-pairing bug.** All four earlier
+trackers store `plants` in sorted-ID order, so a migration that paired payloads
+positionally against a sorted roster produced byte-identical output on every
+one of them. `spaced-paste` stores `sp06, sp01, sp02, sp03, sp05`. The check
+that catches it asserts on payload unique per record (`selection_notes` exists
+on sp06 alone; each `observation_log` names its own source tab), because a
+count or a field-set comparison cannot see a shuffle. Run against the shared
+contract, this mutant fails on the `[spaced-paste]` parametrization **only** —
+which is the evidence for the uniqueness claim, rather than a docstring
+asserting it.
+
+**`''` at plant level.** kibungan proved `''` and `None` are distinguishable at
+*project* level (`google_sheet_url` vs `google_sheet_id`); `photos_drive_url`
+is `''` on all five plants here, the first time that is true of a plant field.
+Asserted in the raw frontmatter as well as through the reader, because reading
+a missing key returns the template default and hides the difference — the same
+reason Task 3.4 checks paloma-coma's nulls in the bytes. This project has both
+at once: nine always-null columns *and* a neighbouring always-empty-string one,
+so conflating them is live rather than stylistic.
+
+**What was deliberately NOT done.** No check from this module was lifted into
+the shared contract. Task 3.4 lifted kibungan's routing checks because they
+were generic checks that happened to be discovered on one project's data; these
+are the opposite — each one is inexpressible on a project without lowercase
+IDs, an unsorted array or an empty-string plant field, and parametrizing them
+over `PROJECT_SPECS` would produce four vacuous passes per check. The premise
+of each is asserted separately (`test_this_project_is_the_first_with_lowercase_
+plant_ids`, `test_the_source_array_is_not_in_id_order`,
+`test_photos_drive_url_is_the_empty_string_on_every_plant`) so the fixture
+cannot silently stop discriminating.
+
+Final state: 656 tests (was 606), 100% green, zero warnings (`pytest -W error`);
+232/232 out-of-band checks across all five migrated projects on a clean tree
+(was 187 across four); `tracker.json` md5
+`dee45e00a1ae55cfa71463f2a45ac358` unchanged.
