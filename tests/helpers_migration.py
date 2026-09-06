@@ -33,6 +33,23 @@ def registry_entry(spec):
     )
 
 
+def sibling_prefixes(spec):
+    """Every OTHER registry project's `(slug, plant_id_prefixes)`.
+
+    Production routes one Discord message against the whole registry, so a
+    migrated pattern is only safe if it does not collide with any sibling.
+    Read from `registry.json` rather than from `PROJECT_SPECS` deliberately:
+    the projects not yet migrated (spaced-paste, lantz) are live in production
+    today and a collision with one of them is just as real.
+    """
+    projects = json.loads(spec.registry.read_text(encoding="utf-8"))["projects"]
+    return [
+        (e["slug"], e["plant_id_prefixes"])
+        for e in projects
+        if e["slug"] != spec.slug and e.get("plant_id_prefixes")
+    ]
+
+
 @pytest.fixture
 def no_side_effects(monkeypatch):
     """Booby-trap every mechanism that could reach Discord, Drive or a git remote.

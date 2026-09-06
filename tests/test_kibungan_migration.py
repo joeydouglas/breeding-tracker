@@ -124,9 +124,17 @@ def test_the_migrated_patterns_still_route_realistic_discord_text(migrated):
     against genuinely lowercase text, the `[-#]?\\s*` separator class, and the
     `(?<![A-Z0-9])` lookbehind against an alphanumeric neighbour rather than
     the generic contract's `X` prefix.
+
+    Compiled with `ROUTING_FLAGS` — production's `re.IGNORECASE` — so this
+    module tests the same matcher as the contract and as the monitor.
     """
+    from migration_harness import ROUTING_FLAGS
+
     _, out = migrated
-    patterns = {p["prefix"]: re.compile(p["pattern"]) for p in _project(out)["plant_id_prefixes"]}
+    patterns = {
+        p["prefix"]: re.compile(p["pattern"], ROUTING_FLAGS)
+        for p in _project(out)["plant_id_prefixes"]
+    }
 
     assert patterns["PK"].search("checked pk-7 today").group(1) == "7"
     assert patterns["PK"].search("PK #12 stretching").group(1) == "12"

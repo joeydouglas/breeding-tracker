@@ -31,6 +31,7 @@ from helpers_migration import (  # noqa: F401  (fixture re-export)
     migrate_project,
     no_side_effects,
     registry_entry as _registry_entry,
+    sibling_prefixes as _sibling_prefixes,
     tracker_json as _tracker_json,
 )
 from migration_harness import live_tree_state
@@ -324,10 +325,15 @@ def test_the_migrated_patterns_still_route_this_projects_real_plant_ids(
     patterns are compiled out of the migrated markdown and run against the
     real IDs for every project.
 
-    Per prefix: it matches exactly its own family's IDs and no other family's;
-    across prefixes: every real ID is routed by exactly one pattern.
+    The checking itself lives in `migration_harness.routing_failures`, shared
+    verbatim with `tools/verify_migration.py`, and covers: per prefix, exactly
+    its own family and no other's; in free text, in every separator spelling
+    and both letter cases, with the right captured number; the boundary
+    construct still rejecting a leading character; across prefixes, exactly
+    one pattern per ID; and across projects, no collision with any sibling in
+    `registry.json`. Everything compiles with the flags production uses.
     """
-    import re
+    from migration_harness import routing_failures
 
     from project_markdown import load_schema, read_project
 
@@ -340,20 +346,55 @@ def test_the_migrated_patterns_still_route_this_projects_real_plant_ids(
     ids = sorted(p["id"] for p in _tracker_json(spec)["plants"])
     assert ids, "no plant IDs -- the check would be vacuous"
 
-    routed_by = {i: [] for i in ids}
-    for entry in prefixes:
-        compiled = re.compile(entry["pattern"])
-        own = [i for i in ids if i.upper().startswith(entry["prefix"].upper())]
-        matched = [i for i in ids if compiled.search(i)]
-        assert own, f"{entry['prefix']} routes no real ID in this project"
-        assert matched == own, (
-            f"{entry['prefix']} pattern routes {matched}, expected {own}"
-        )
-        for i in matched:
-            routed_by[i].append(entry["prefix"])
+    failures = routing_failures(prefixes, ids, other_projects=_sibling_prefixes(spec))
+    assert not failures, failures
 
-    for plant_id, hits in routed_by.items():
-        assert len(hits) == 1, f"{plant_id} routed by {hits}, expected exactly one"
+
+@spec_param
+def test_the_migrated_patterns_do_not_collide_with_any_sibling_project(
+    spec, tmp_path, no_side_effects
+):
+    """Production routes one Discord message against the WHOLE registry.
+
+    Every per-project check — including the behavioural one lifted in Task
+    3.4 — only ever proved a project's patterns unambiguous *among
+    themselves*. A pattern widened during migration so that it also swallows a
+    sibling cross's IDs passes on both projects in isolation while silently
+    stealing the sibling's notes; `breeding_core`'s registry validator rejects
+    a duplicated prefix for exactly this reason, so the migrated markdown must
+    be held to the same standard.
+
+    Asserted as a discriminating case: the sibling set is non-empty (otherwise
+    the check is vacuous) and a deliberately widened copy of this project's
+    own pattern is confirmed to be caught.
+    """
+    from migration_harness import routing_failures
+
+    from project_markdown import load_schema, read_project
+
+    _, out = _migrate(spec, tmp_path)
+    prefixes = read_project(
+        out / "project.md", schema=load_schema(PROJECT_TEMPLATE)
+    )["plant_id_prefixes"]
+    ids = sorted(p["id"] for p in _tracker_json(spec)["plants"])
+    siblings = _sibling_prefixes(spec)
+
+    assert siblings, "no sibling projects in the registry -- check is vacuous"
+    assert not routing_failures(prefixes, ids, other_projects=siblings)
+
+    # The check must be able to SEE a collision, not merely never report one.
+    stolen_prefix = siblings[0][1][0]["prefix"]
+    widened = [
+        {
+            "prefix": entry["prefix"],
+            "pattern": r"(?<![A-Z0-9])[A-Z]{1,3}\s*[-#]?\s*0*(\d{1,3})(?!\d)",
+        }
+        for entry in prefixes
+    ]
+    caught = routing_failures(widened, ids, other_projects=siblings)
+    assert any("cross-project collision" in f for f in caught), (
+        f"a pattern widened to swallow {stolen_prefix} was not reported: {caught}"
+    )
 
 
 @spec_param
@@ -368,8 +409,17 @@ def test_the_migrated_patterns_route_ids_embedded_in_free_text(
     asserted, not merely that something matched. The negative (an extra
     leading character must not match) is what proves the boundary construct
     survived rather than being silently dropped.
+
+    Every separator spelling is probed, not just the bare one: each live
+    pattern carries a separator class (`[\\s\\-]?`, `\\s*[-#]?\\s*`) and people
+    type `PC 01` and `PC-01` as readily as `PC01`, so probing only the bare
+    form leaves the class unexercised and a migration that ate it invisible.
+    Both letter cases are probed too, because production compiles with
+    `re.IGNORECASE`.
     """
     import re
+
+    from migration_harness import ROUTING_FLAGS, ROUTING_SEPARATORS, routing_failures
 
     from project_markdown import load_schema, read_project
 
@@ -378,26 +428,30 @@ def test_the_migrated_patterns_route_ids_embedded_in_free_text(
         out / "project.md", schema=load_schema(PROJECT_TEMPLATE)
     )["plant_id_prefixes"]
     ids = sorted(p["id"] for p in _tracker_json(spec)["plants"])
-    checked = 0
 
-    for entry in prefixes:
-        compiled = re.compile(entry["pattern"])
-        for plant_id in ids:
-            if not plant_id.upper().startswith(entry["prefix"].upper()):
-                continue
-            digits = re.search(r"(\d+)$", plant_id).group(1)
+    assert not routing_failures(prefixes, ids), routing_failures(prefixes, ids)
 
-            match = compiled.search(f"checked {plant_id} today, looking good")
-            assert match, f"{plant_id} not routed inside free text"
-            assert int(match.group(1)) == int(digits), plant_id
+    # The separator probe must be discriminating on THIS project's data: a
+    # pattern with its separator class removed has to be caught here, or the
+    # spellings above were routing for some unrelated reason.
+    stripped = [
+        {
+            "prefix": entry["prefix"],
+            "pattern": re.sub(
+                r"(\[\\s\\-\]\?|\\s\*\[-#\]\?\\s\*)", "", entry["pattern"]
+            ),
+        }
+        for entry in prefixes
+    ]
+    assert stripped != prefixes, "no separator class in this project's patterns"
+    caught = routing_failures(stripped, ids)
+    assert any("separator" in f for f in caught), (
+        f"stripping the separator class was not caught: {caught}"
+    )
 
-            assert compiled.search(f"X{plant_id}") is None, (
-                f"{plant_id} still matches with a leading character -- the "
-                f"boundary construct did not survive"
-            )
-            checked += 1
-
-    assert checked == len(ids), "did not exercise every real ID"
+    # And the flags really are production's, on the objects this test used.
+    assert ROUTING_FLAGS == re.IGNORECASE
+    assert ROUTING_SEPARATORS == ("", " ", "-")
 
 
 @spec_param

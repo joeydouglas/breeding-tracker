@@ -37,7 +37,9 @@ by the migration would move and a `git gc` would not.
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -74,6 +76,8 @@ def _run(argv, *, cwd, check=True, text=True):
 
 __all__ = [
     "ProjectSpec",
+    "ROUTING_FLAGS",
+    "ROUTING_SEPARATORS",
     "describe_baseline_dirt",
     "fingerprint_tree",
     "git_head_sha",
@@ -82,9 +86,166 @@ __all__ = [
     "is_volatile_path",
     "live_tree_state",
     "nested_repo_state",
+    "routing_failures",
     "unexpected_git_changes",
     "unexpected_repo_changes",
 ]
+
+
+# --------------------------------------------------------------------------
+# plant-ID routing: does the MIGRATED pattern still route, as production runs it
+# --------------------------------------------------------------------------
+
+#: The flags production compiles routing patterns with.
+#: `breeding_core._compile_prefixes` passes `re.IGNORECASE`, matching
+#: `extract_plant_ids_single`'s `re.findall(..., re.IGNORECASE)`. Compiling
+#: with no flags here would test a STRICTER matcher than the one that runs:
+#: a pattern that routes `PC01` but not `pc01` would read as clean while
+#: production silently accepted (or, for a `(?-i:)`-scoped pattern, dropped)
+#: half the real Discord traffic. The parity is asserted in
+#: `tests/test_routing_checks.py` against production's source.
+ROUTING_FLAGS = re.IGNORECASE
+
+#: Every separator spelling a real pattern's separator class must accept.
+#: Each live pattern carries one (`[\s\-]?`, `\s*[-#]?\s*`), and people type
+#: all three spellings into Discord. Probing only the bare `PC01` form leaves
+#: the class unexercised, so a migration that ate it keeps every other
+#: assertion green while `PC 01` and `PC-01` stop routing.
+ROUTING_SEPARATORS = ("", " ", "-")
+
+
+def _representative_ids(prefix: str) -> list[str]:
+    """Plausible IDs for `prefix` when that project's real roster is unavailable.
+
+    Used only for the cross-project collision probe, where the question is
+    "would a message naming another cross's plant be swallowed by THIS
+    project's pattern" — for which the sibling's declared prefix is enough,
+    and which must keep working on a machine that has only some trackers.
+    """
+    return [f"{prefix}{n:02d}" for n in (1, 7, 12)]
+
+
+def routing_failures(
+    prefixes: Sequence[Mapping[str, str]],
+    plant_ids: Sequence[str],
+    other_projects: Sequence[tuple[str, Sequence[Mapping[str, str]]]] = (),
+) -> list[str]:
+    """Every way `prefixes` fails to route `plant_ids` the way production does.
+
+    Returns a list of human-readable failures; empty means the migrated
+    patterns route exactly as they must. One implementation, shared by the
+    contract suite and the out-of-band verifier, so the two cannot drift.
+
+    Checked, per prefix entry:
+
+    * it routes exactly its own family's real IDs and no other family's;
+    * it routes each of those IDs inside free text, in every separator
+      spelling of `ROUTING_SEPARATORS`, returning the right captured number
+      (the monitor uses that group to pick the plant);
+    * it does NOT match with an extra leading character, which is what proves
+      the boundary/lookbehind construct survived the migration.
+
+    Across entries: every real ID is routed by exactly one pattern.
+
+    Across projects: no pattern of this project matches another project's IDs,
+    and no other project's pattern matches this project's IDs. Production
+    routes one Discord message against the whole registry, so a pattern
+    widened during migration to swallow a sibling family is a live break that
+    no single-project check can see — both projects pass in isolation while
+    one silently steals the other's notes.
+
+    Everything compiles with `ROUTING_FLAGS`, i.e. exactly what
+    `breeding_core._compile_prefixes` uses.
+    """
+    failures: list[str] = []
+    if not prefixes:
+        return ["no routing patterns declared -- no message could ever route"]
+    if not plant_ids:
+        return ["no real plant IDs -- the routing check would be vacuous"]
+
+    ids = sorted(plant_ids)
+    routed_by: dict[str, list[str]] = {i: [] for i in ids}
+
+    for entry in prefixes:
+        prefix = entry["prefix"]
+        try:
+            compiled = re.compile(entry["pattern"], ROUTING_FLAGS)
+        except re.error as exc:
+            failures.append(f"{prefix}: pattern does not compile: {exc}")
+            continue
+
+        own = [i for i in ids if i.upper().startswith(prefix.upper())]
+        matched = [i for i in ids if compiled.search(i)]
+        if not own:
+            failures.append(f"{prefix}: routes no real ID in this project")
+        if matched != own:
+            failures.append(f"{prefix}: routes {matched}, expected {own}")
+        for i in matched:
+            routed_by[i].append(prefix)
+
+        for plant_id in own:
+            digits = re.search(r"(\d+)$", plant_id).group(1)
+            body = plant_id[: -len(digits)]
+            for sep in ROUTING_SEPARATORS:
+                canonical = f"{body}{sep}{digits}"
+                # Both cases, because production compiles with IGNORECASE and
+                # people type both: a pattern that re-locked its own case (a
+                # scoped `(?-i:)`, a lost inline `(?i)`) routes the canonical
+                # spelling perfectly and drops the other half of the traffic.
+                for spelling in (canonical, canonical.swapcase()):
+                    match = compiled.search(f"checked {spelling} today, looking good")
+                    if not match:
+                        failures.append(
+                            f"{plant_id}: not routed in free text as "
+                            f"{spelling!r} (separator {sep!r})"
+                        )
+                    elif int(match.group(1)) != int(digits):
+                        failures.append(
+                            f"{plant_id}: routed as {spelling!r} but captured "
+                            f"{match.group(1)!r}, expected {digits!r}"
+                        )
+            if compiled.search(f"X{plant_id}"):
+                failures.append(
+                    f"{plant_id}: matches with a leading char (boundary lost)"
+                )
+
+    for plant_id, hits in routed_by.items():
+        if len(hits) != 1:
+            failures.append(f"{plant_id}: routed by {hits}, expected exactly one")
+
+    own_prefixes = {e["prefix"].upper() for e in prefixes}
+    for slug, sibling_prefixes in other_projects:
+        for sibling in sibling_prefixes:
+            sibling_prefix = sibling["prefix"]
+            if sibling_prefix.upper() in own_prefixes:
+                continue
+            try:
+                sibling_compiled = re.compile(sibling["pattern"], ROUTING_FLAGS)
+            except re.error:
+                continue  # the sibling project's own check owns that failure
+            stolen = [i for i in ids if sibling_compiled.search(i)]
+            if stolen:
+                failures.append(
+                    f"cross-project collision: {slug}'s {sibling_prefix!r} "
+                    f"pattern also routes this project's {stolen}"
+                )
+            sibling_ids = _representative_ids(sibling_prefix)
+            for entry in prefixes:
+                if entry["prefix"].upper() == sibling_prefix.upper():
+                    continue
+                try:
+                    compiled = re.compile(entry["pattern"], ROUTING_FLAGS)
+                except re.error:
+                    continue  # already reported above
+                swallowed = [i for i in sibling_ids if compiled.search(i)]
+                if swallowed:
+                    failures.append(
+                        f"cross-project collision: this project's "
+                        f"{entry['prefix']!r} pattern also routes {slug}'s "
+                        f"{swallowed}"
+                    )
+
+    return failures
 
 
 # --------------------------------------------------------------------------

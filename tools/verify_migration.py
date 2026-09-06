@@ -28,15 +28,26 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from migration_harness import (  # noqa: E402  (needs the sys.path line above)
+    ROUTING_FLAGS,
+    ROUTING_SEPARATORS,
     describe_baseline_dirt,
     git_repo_state,
     live_tree_state,
+    routing_failures,
     unexpected_repo_changes,
 )
 from migration_specs import PROJECT_SPECS, SPECS_BY_SLUG  # noqa: E402
 
 PROJECT_TEMPLATE = REPO / "templates" / "project-template.md"
 PLANT_TEMPLATE = REPO / "templates" / "plant-template.md"
+
+#: The production monitor whose routing behaviour this verifier mirrors.
+#: Read statically (never imported: importing it pulls in the Discord/Drive
+#: machinery this sandbox-only verifier must never touch) so the claim
+#: "compiled with the flags production uses" is checked against production.
+PRODUCTION_CORE = (
+    Path.home() / ".hermes" / "breeding" / "_shared" / "monitor-core" / "breeding_core.py"
+)
 
 
 class Checker:
@@ -318,39 +329,76 @@ def verify(spec, check, allow_dirty_baseline=False):
         # is preserved perfectly but is broken at source (or that collides with
         # a sibling family) reads as clean under an equality check and silently
         # drops every Discord note for that project. Compiled out of the
-        # MIGRATED markdown, run against the real IDs and against free text.
+        # MIGRATED markdown with the flags production uses, run against the
+        # real IDs, against free text in every separator spelling and letter
+        # case, and against every OTHER project in the registry -- production
+        # routes one message against the whole registry, so a pattern widened
+        # to swallow a sibling cross is a live break that a per-project check
+        # cannot see.
         source_ids = sorted(p["id"] for p in source_plants)
-        routed_by = {i: [] for i in source_ids}
-        routing_failures = []
-        for prefix_entry in got_project["plant_id_prefixes"]:
-            compiled = re.compile(prefix_entry["pattern"])
-            own = [
-                i
-                for i in source_ids
-                if i.upper().startswith(prefix_entry["prefix"].upper())
-            ]
-            matched = [i for i in source_ids if compiled.search(i)]
-            if matched != own or not own:
-                routing_failures.append(
-                    f"{prefix_entry['prefix']}: routes {matched}, expected {own}"
-                )
-            for i in matched:
-                routed_by[i].append(prefix_entry["prefix"])
-            for plant_id in own:
-                digits = re.search(r"(\d+)$", plant_id).group(1)
-                free = compiled.search(f"checked {plant_id} today, looking good")
-                if not free or int(free.group(1)) != int(digits):
-                    routing_failures.append(f"{plant_id}: not routed in free text")
-                if compiled.search(f"X{plant_id}"):
-                    routing_failures.append(
-                        f"{plant_id}: matches with a leading char (boundary lost)"
-                    )
-        ambiguous = [i for i, hits in routed_by.items() if len(hits) != 1]
+        siblings = [
+            (e["slug"], e["plant_id_prefixes"])
+            for e in json.loads(registry.read_text(encoding="utf-8"))["projects"]
+            if e["slug"] != slug and e.get("plant_id_prefixes")
+        ]
+        failures = routing_failures(
+            got_project["plant_id_prefixes"], source_ids, other_projects=siblings
+        )
         check(
-            "every real plant ID is routed by exactly one migrated pattern, "
-            "bare and in free text",
-            not routing_failures and not ambiguous and bool(source_ids),
-            str(routing_failures[:5] + [f"ambiguous={ambiguous[:5]}"]),
+            "every real plant ID is routed by exactly one migrated pattern -- "
+            "bare, in free text, in every separator spelling and letter case, "
+            "and with no cross-project collision",
+            not failures and bool(source_ids),
+            str(failures[:5]),
+        )
+        check(
+            "the routing check is discriminating: a pattern widened to swallow "
+            "a sibling cross IS reported",
+            bool(siblings)
+            and any(
+                "cross-project collision" in f
+                for f in routing_failures(
+                    [
+                        {
+                            "prefix": e["prefix"],
+                            "pattern": (
+                                r"(?<![A-Z0-9])[A-Z]{1,3}\s*[-#]?\s*0*(\d{1,3})(?!\d)"
+                            ),
+                        }
+                        for e in got_project["plant_id_prefixes"]
+                    ],
+                    source_ids,
+                    other_projects=siblings,
+                )
+            ),
+            f"siblings={[s for s, _ in siblings]}",
+        )
+        stripped = [
+            {
+                "prefix": e["prefix"],
+                "pattern": re.sub(
+                    r"(\[\\s\\-\]\?|\\s\*\[-#\]\?\\s\*)", "", e["pattern"]
+                ),
+            }
+            for e in got_project["plant_id_prefixes"]
+        ]
+        check(
+            "the routing check is discriminating: removing the separator class "
+            "(so `PC 01`/`PC-01` stop routing) IS reported",
+            stripped != got_project["plant_id_prefixes"]
+            and any("separator" in f for f in routing_failures(stripped, source_ids)),
+        )
+        check(
+            "routing patterns are compiled with production's flags "
+            "(breeding_core._compile_prefixes uses re.IGNORECASE)",
+            ROUTING_FLAGS == re.IGNORECASE
+            and ROUTING_SEPARATORS == ("", " ", "-")
+            and (
+                not PRODUCTION_CORE.exists()
+                or "re.compile(spec['pattern'], re.IGNORECASE)"
+                in PRODUCTION_CORE.read_text(encoding="utf-8")
+            ),
+            f"flags={ROUTING_FLAGS!r} separators={ROUTING_SEPARATORS!r}",
         )
 
         # --- the gate must see the registry-sourced routing fields -----------
