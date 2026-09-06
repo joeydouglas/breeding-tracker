@@ -8,7 +8,6 @@ code and its tests cannot hide.
 Run:  .venv/bin/python tools/verify_mule_fuel_migration.py
 """
 
-import hashlib
 import json
 import subprocess
 import sys
@@ -17,6 +16,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
+
+from migration_harness import (  # noqa: E402  (needs the sys.path line above)
+    git_status_snapshot,
+    live_tree_state,
+    unexpected_git_changes,
+)
 
 SLUG = "mule-fuel-x-nana-glue"
 LIVE = Path.home() / ".hermes" / "breeding" / SLUG
@@ -43,10 +48,14 @@ def md5sum_via_system(path):
 
 
 def snapshot(root):
-    return {
-        str(p.relative_to(root)): (p.lstat().st_size, p.lstat().st_mtime_ns)
-        for p in sorted(root.rglob("*"))
-    }
+    """Live-tree state: data-file fingerprints + nested-repo HEAD/status.
+
+    Volatile paths (__pycache__/, cache/, .pytest_cache/, dashboard/.git/)
+    are excluded because unrelated processes rewrite them mid-run; the nested
+    repos they contain are covered by a strictly stronger check instead. See
+    migration_harness.
+    """
+    return live_tree_state(root)
 
 
 def main():
@@ -56,6 +65,12 @@ def main():
 
     print(f"tracker : {TRACKER}")
     print(f"registry: {REGISTRY}\n")
+
+    # Captured BEFORE anything runs: this is the allowance the end-of-run git
+    # check diffs against, replacing the old hardcoded path whitelist.
+    git_baseline = {
+        repo: git_status_snapshot(repo) for repo in (REPO, REGISTRY.parent)
+    }
 
     tracker_md5_before = md5sum_via_system(TRACKER)
     registry_md5_before = md5sum_via_system(REGISTRY)
@@ -333,9 +348,10 @@ def main():
         md5sum_via_system(REGISTRY) == registry_md5_before,
     )
     check(
-        "entire live project dir unchanged (size+mtime of every file)",
+        "entire live project dir unchanged (data files + nested repo HEAD/status)",
         snapshot(LIVE) == live_before,
-        f"{len(live_before)} paths fingerprinted",
+        f"{len(live_before['files'])} data paths + "
+        f"{len(live_before['repos'])} nested repos",
     )
     check(
         "summary reports tracker unchanged",
@@ -343,32 +359,17 @@ def main():
     )
 
     # --- no git side effects anywhere -------------------------------------
+    # Baseline-diff, not a whitelist. The previous version dropped every
+    # porcelain line naming one of six paths AND every line containing
+    # "tools/" at all -- a blanket escape that forgave any change anywhere
+    # under tools/, including this script rewriting itself.
     for repo in (REPO, REGISTRY.parent):
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=str(repo),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        # breeding-markdown legitimately has this task's new source/test files.
-        unexpected = [
-            line
-            for line in status.splitlines()
-            if not line.endswith(
-                (
-                    "src/tracker_migration.py",
-                    "tests/test_tracker_migration.py",
-                    "tests/test_mule_fuel_migration.py",
-                    "tools/verify_mule_fuel_migration.py",
-                    "DECISIONS.md",
-                    "TASK-3.1-MIGRATION-REPORT.md",
-                )
-            )
-            and "tools/" not in line
-        ]
-        check(f"no unexpected git changes in {repo.name}", not unexpected,
-              str(unexpected))
+        unexpected = unexpected_git_changes(
+            git_baseline[repo], git_status_snapshot(repo)
+        )
+        check(
+            f"no unexpected git changes in {repo.name}", not unexpected, str(unexpected)
+        )
 
     print()
     if failures:
