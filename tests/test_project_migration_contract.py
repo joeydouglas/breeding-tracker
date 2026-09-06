@@ -351,6 +351,86 @@ def test_the_migrated_patterns_still_route_this_projects_real_plant_ids(
 
 
 @spec_param
+def test_the_migrated_patterns_route_every_separator_their_source_declared(
+    spec, tmp_path, no_side_effects
+):
+    """A separator class NARROWED during migration erases its own evidence.
+
+    `declared_separators` reads the probe set out of the pattern it is given,
+    which catches a pattern that advertises `#` and fails to route it — but a
+    migration that turns `[-#]?` into `[-]?` shrinks the derived set along
+    with the bug and stays green. The source registry pattern is the fixed
+    point, so the migrated pattern is held to the separators the SOURCE
+    declared.
+    """
+    from migration_harness import declared_separators, routing_failures
+
+    from project_markdown import load_schema, read_project
+
+    _, out = _migrate(spec, tmp_path)
+    prefixes = read_project(
+        out / "project.md", schema=load_schema(PROJECT_TEMPLATE)
+    )["plant_id_prefixes"]
+    ids = sorted(p["id"] for p in _tracker_json(spec)["plants"])
+
+    expected = {
+        e["prefix"]: declared_separators(e["pattern"])
+        for e in _registry_entry(spec)["plant_id_prefixes"]
+    }
+    assert not routing_failures(prefixes, ids, separators=expected)
+
+    # Discriminating on THIS project's data: narrowing each pattern's
+    # separator class to the bare `-` must be caught against the source set.
+    narrowed = [
+        {
+            "prefix": e["prefix"],
+            "pattern": e["pattern"]
+            .replace(r"[-#]?", "[-]?")
+            .replace(r"[\s\-]?", r"[\s]?"),
+        }
+        for e in prefixes
+    ]
+    assert narrowed != prefixes, "no separator class in this project's patterns"
+    caught = routing_failures(narrowed, ids, separators=expected)
+    assert any("separator" in f for f in caught), (
+        f"narrowing the separator class was not caught: {caught}"
+    )
+
+
+@spec_param
+def test_a_sibling_project_duplicating_this_prefix_is_reported(
+    spec, tmp_path, no_side_effects
+):
+    """The collision production refuses to start on.
+
+    `breeding_core`'s registry validator raises when two projects declare the
+    same prefix case-insensitively; the lifted check used to treat exactly
+    that condition as a reason to skip the sibling, so the worst collision was
+    the only one it could never report. Asserted on this project's real
+    prefixes against a synthetic twin.
+    """
+    from migration_harness import routing_failures
+
+    from project_markdown import load_schema, read_project
+
+    _, out = _migrate(spec, tmp_path)
+    prefixes = read_project(
+        out / "project.md", schema=load_schema(PROJECT_TEMPLATE)
+    )["plant_id_prefixes"]
+    ids = sorted(p["id"] for p in _tracker_json(spec)["plants"])
+
+    # A twin declaring this project's own prefix, in swapped case, to prove
+    # the report is case-insensitive the way production's validator is.
+    twin = [
+        {"prefix": e["prefix"].swapcase(), "pattern": e["pattern"]} for e in prefixes
+    ]
+    caught = routing_failures(prefixes, ids, other_projects=[("evil-twin", twin)])
+    assert any("duplicate prefix" in f for f in caught), (
+        f"a sibling duplicating this project's prefix was not reported: {caught}"
+    )
+
+
+@spec_param
 def test_the_migrated_patterns_do_not_collide_with_any_sibling_project(
     spec, tmp_path, no_side_effects
 ):

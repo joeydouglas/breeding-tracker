@@ -77,7 +77,9 @@ def _run(argv, *, cwd, check=True, text=True):
 __all__ = [
     "ProjectSpec",
     "ROUTING_FLAGS",
+    "ROUTING_OPTIONAL_SEPARATORS",
     "ROUTING_SEPARATORS",
+    "declared_separators",
     "describe_baseline_dirt",
     "fingerprint_tree",
     "git_head_sha",
@@ -113,6 +115,42 @@ ROUTING_FLAGS = re.IGNORECASE
 #: assertion green while `PC 01` and `PC-01` stop routing.
 ROUTING_SEPARATORS = ("", " ", "-")
 
+#: Separators a pattern must route *if its own separator class declares them*.
+#:
+#: `#` cannot join `ROUTING_SEPARATORS`: that set is what EVERY pattern must
+#: accept, and paloma-coma's live `[\s\-]?` legitimately does not route
+#: `PC#01` — demanding it would fail a healthy project. But kibungan's live
+#: class is `[-#]?`: it advertises `#`, people type `PK#7`, and the
+#: universal-only probe set meant no `#` was ever sent through any pattern, so
+#: a migration that kept the class shape while breaking that one branch stayed
+#: green. The probe set is therefore per-pattern — the universal three plus
+#: whatever the pattern itself declares — via `declared_separators`.
+ROUTING_OPTIONAL_SEPARATORS = ("#",)
+
+#: Characters inside a `[...]` class that are separator constructs, not part
+#: of the ID. Matched against the class body of the pattern's separator class.
+_SEPARATOR_CLASS = re.compile(r"\[([^\]]*)\]\??")
+
+
+def declared_separators(pattern: str) -> tuple[str, ...]:
+    """`ROUTING_SEPARATORS` plus every optional separator `pattern` declares.
+
+    Deliberately syntactic — it reads the pattern's own character classes —
+    because the question is "what does this pattern claim to accept", and the
+    answer has to be derivable from a pattern read out of migrated markdown.
+
+    Note the limit this has on its own: a migration that NARROWS `[-#]?` to
+    `[-]?` also erases the evidence that `#` was expected, so a self-derived
+    set shrinks with the bug. Callers that hold a migrated pattern against its
+    source pass the SOURCE's separators explicitly to `routing_failures`.
+    """
+    declared = list(ROUTING_SEPARATORS)
+    for body in _SEPARATOR_CLASS.findall(pattern):
+        for sep in ROUTING_OPTIONAL_SEPARATORS:
+            if sep in body and sep not in declared:
+                declared.append(sep)
+    return tuple(declared)
+
 
 def _representative_ids(prefix: str) -> list[str]:
     """Plausible IDs for `prefix` when that project's real roster is unavailable.
@@ -129,6 +167,7 @@ def routing_failures(
     prefixes: Sequence[Mapping[str, str]],
     plant_ids: Sequence[str],
     other_projects: Sequence[tuple[str, Sequence[Mapping[str, str]]]] = (),
+    separators: Mapping[str, Sequence[str]] | None = None,
 ) -> list[str]:
     """Every way `prefixes` fails to route `plant_ids` the way production does.
 
@@ -183,10 +222,18 @@ def routing_failures(
         for i in matched:
             routed_by[i].append(prefix)
 
+        # The universal three, plus whatever THIS pattern declares -- unless
+        # the caller supplied the source pattern's set, which is the only way
+        # to catch a class NARROWED away from a separator it used to accept.
+        if separators is not None and prefix in separators:
+            probe_separators = tuple(separators[prefix])
+        else:
+            probe_separators = declared_separators(entry["pattern"])
+
         for plant_id in own:
             digits = re.search(r"(\d+)$", plant_id).group(1)
             body = plant_id[: -len(digits)]
-            for sep in ROUTING_SEPARATORS:
+            for sep in probe_separators:
                 canonical = f"{body}{sep}{digits}"
                 # Both cases, because production compiles with IGNORECASE and
                 # people type both: a pattern that re-locked its own case (a
@@ -218,6 +265,19 @@ def routing_failures(
         for sibling in sibling_prefixes:
             sibling_prefix = sibling["prefix"]
             if sibling_prefix.upper() in own_prefixes:
+                # NOT a reason to skip: this is the WORST collision there is.
+                # `breeding_core`'s registry validator raises on two projects
+                # declaring the same prefix (case-insensitively) precisely
+                # because one message would route to two crosses -- production
+                # refuses to start. Treating it as `continue` meant the one
+                # state production rejects outright was the only collision the
+                # probe could never report.
+                failures.append(
+                    f"duplicate prefix: {slug} also declares "
+                    f"{sibling_prefix!r} -- production's registry validator "
+                    f"rejects this outright (one message would route to two "
+                    f"crosses)"
+                )
                 continue
             try:
                 sibling_compiled = re.compile(sibling["pattern"], ROUTING_FLAGS)

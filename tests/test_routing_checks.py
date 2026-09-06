@@ -34,7 +34,13 @@ from pathlib import Path
 
 import pytest
 
-from migration_harness import ROUTING_FLAGS, ROUTING_SEPARATORS, routing_failures
+from migration_harness import (
+    ROUTING_FLAGS,
+    ROUTING_OPTIONAL_SEPARATORS,
+    ROUTING_SEPARATORS,
+    declared_separators,
+    routing_failures,
+)
 
 #: A well-formed single-prefix project, shaped exactly like paloma-coma's.
 PC = [{"prefix": "PC", "pattern": r"\bPC[\s\-]?(\d{1,2})\b"}]
@@ -120,6 +126,130 @@ def test_every_separator_spelling_is_probed():
     spelling that hid gap 2.
     """
     assert ROUTING_SEPARATORS == ("", " ", "-")
+
+
+# ------------------------------------ gap 2b: the '#' separator -------------
+#
+# `ROUTING_SEPARATORS` is the set EVERY real pattern must accept, so it cannot
+# carry `#`: paloma-coma's `[\s\-]?` legitimately does not route `PC#01` and
+# demanding it would make a healthy project red. But kibungan's real class is
+# `[-#]?` -- it *declares* `#`, people type `PK#7`, and no probe ever sent a
+# `#` through any pattern. The universal set being the only set is what made
+# that unreachable, so the probe set is now per-pattern: the universal three
+# plus every optional separator the pattern itself declares.
+
+
+def test_the_optional_separator_set_carries_the_hash():
+    """Named explicitly so `#` cannot silently drop back out of the probes."""
+    assert ROUTING_OPTIONAL_SEPARATORS == ("#",)
+
+
+def test_declared_separators_adds_hash_only_for_a_pattern_that_declares_it():
+    """A pattern is only held to the separators it actually claims to accept."""
+    assert declared_separators(PC[0]["pattern"]) == ("", " ", "-")
+    assert declared_separators(PK_PL[0]["pattern"]) == ("", " ", "-", "#")
+
+
+def test_a_pattern_declaring_hash_but_not_routing_it_is_a_failure():
+    """The gap the universal-only set could not see.
+
+    `[-#]?` with a `(?![#])` guard in front of it -- a plausible "don't match
+    Discord channel refs like #123" edit -- still routes the bare, spaced and
+    hyphenated spellings, so every universal probe stays green while `PK#7`,
+    which the class still advertises, stops routing.
+    """
+    guarded = [
+        {
+            "prefix": "PK",
+            "pattern": r"(?<![A-Z0-9])PK\s*(?![#])[-#]?\s*0*(\d{1,3})(?!\d)",
+        }
+    ]
+    failures = routing_failures(guarded, ["PK01", "PK03"])
+    assert failures, "a declared-but-unroutable '#' separator went unreported"
+    assert any("'#'" in f for f in failures), failures
+
+
+def test_a_pattern_that_never_declared_hash_is_not_required_to_route_it():
+    """Guards the per-pattern set against becoming a universal `#` demand.
+
+    paloma-coma's live `[\\s\\-]?` does not accept `PC#01` and must not be
+    reported for it, or every single-prefix project goes red on healthy data.
+    """
+    assert routing_failures(PC, PC_IDS) == []
+
+
+def test_a_separator_class_narrowed_away_from_hash_is_caught_by_the_source_set():
+    """Deriving the probes from the migrated pattern alone is not enough.
+
+    A migration that narrows `[-#]?` to `[-]?` also removes the evidence that
+    `#` was ever expected, so a self-derived probe set shrinks with it and
+    stays green. Callers therefore pass the separators declared by the
+    *source* registry pattern, and the migrated pattern is held to those.
+    """
+    narrowed = [
+        {"prefix": "PK", "pattern": r"(?<![A-Z0-9])PK\s*[-]?\s*0*(\d{1,3})(?!\d)"}
+    ]
+    assert routing_failures(narrowed, ["PK01", "PK03"]) == [], (
+        "self-derived probes are expected to miss this; the source set is the fix"
+    )
+
+    expected = {"PK": declared_separators(PK_PL[0]["pattern"])}
+    failures = routing_failures(narrowed, ["PK01", "PK03"], separators=expected)
+    assert failures, "a separator class narrowed away from '#' went unreported"
+    assert any("'#'" in f for f in failures), failures
+
+
+def test_explicit_separators_are_keyed_by_prefix():
+    """A project may mix pattern shapes, so the expectation is per prefix."""
+    expected = {e["prefix"]: declared_separators(e["pattern"]) for e in PK_PL}
+    assert routing_failures(PK_PL, PK_PL_IDS, separators=expected) == []
+
+
+# ------------------------------------ gap 4: duplicated prefixes ------------
+#
+# `_compile_prefixes`' caller RAISES on two projects declaring the same prefix
+# (case-insensitively): one message would route to two crosses. The lifted
+# check treated that exact condition as a reason to `continue` -- the one
+# state production refuses to start on was the one state the collision probe
+# skipped, so the worst collision was the only one that could never fail.
+
+
+def test_a_sibling_project_declaring_the_same_prefix_is_a_failure():
+    twin = [{"prefix": "PC", "pattern": r"\bPC[\s\-]?(\d{1,2})\b"}]
+    failures = routing_failures(PC, PC_IDS, other_projects=[("evil-twin", twin)])
+    assert failures, "a duplicated prefix across projects went unreported"
+    assert any("duplicate prefix" in f for f in failures), failures
+    assert any("evil-twin" in f for f in failures), failures
+
+
+def test_the_duplicate_prefix_check_is_case_insensitive_like_production():
+    """Production compares `prefix.casefold()`, so `pc` and `PC` are one prefix."""
+    twin = [{"prefix": "pc", "pattern": r"\bpc[\s\-]?(\d{1,2})\b"}]
+    failures = routing_failures(PC, PC_IDS, other_projects=[("evil-twin", twin)])
+    assert any("duplicate prefix" in f for f in failures), failures
+
+
+def test_the_production_registry_validator_really_rejects_duplicate_prefixes():
+    """Parity asserted against production's source, not assumed.
+
+    If `breeding_core` ever stops rejecting a duplicated prefix, this failure
+    stops being a live break and this check would be inventing a rule.
+    """
+    core = (
+        Path.home()
+        / ".hermes"
+        / "breeding"
+        / "_shared"
+        / "monitor-core"
+        / "breeding_core.py"
+    )
+    if not core.exists():
+        pytest.skip("production breeding_core.py not present on this machine")
+    source = core.read_text(encoding="utf-8")
+    assert "prefix.casefold()" in source and "seen_prefixes" in source, (
+        "production no longer rejects duplicated prefixes case-insensitively -- "
+        "the migration contract is now asserting a rule production dropped"
+    )
 
 
 def test_a_wrong_captured_group_is_a_failure():

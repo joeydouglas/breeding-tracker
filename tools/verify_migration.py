@@ -30,6 +30,7 @@ sys.path.insert(0, str(REPO / "src"))
 from migration_harness import (  # noqa: E402  (needs the sys.path line above)
     ROUTING_FLAGS,
     ROUTING_SEPARATORS,
+    declared_separators,
     describe_baseline_dirt,
     git_repo_state,
     live_tree_state,
@@ -399,6 +400,79 @@ def verify(spec, check, allow_dirty_baseline=False):
                 in PRODUCTION_CORE.read_text(encoding="utf-8")
             ),
             f"flags={ROUTING_FLAGS!r} separators={ROUTING_SEPARATORS!r}",
+        )
+
+        # --- separators the SOURCE pattern declared -------------------------
+        # `[-#]?` advertises `#` and people type `PK#7`, but `#` cannot join
+        # the universal set: paloma-coma's `[\s\-]?` legitimately rejects
+        # `PC#01`. So each pattern is probed with the universal three plus
+        # what it declares -- and held against the SOURCE registry's set,
+        # because a migration that NARROWS `[-#]?` to `[-]?` also erases the
+        # evidence that `#` was ever expected.
+        source_separators = {
+            e["prefix"]: declared_separators(e["pattern"])
+            for e in entry["plant_id_prefixes"]
+        }
+        check(
+            "every migrated pattern routes every separator its SOURCE registry "
+            "pattern declared (including '#' where the class carries it)",
+            not routing_failures(
+                got_project["plant_id_prefixes"],
+                source_ids,
+                separators=source_separators,
+            ),
+            f"separators={source_separators}",
+        )
+        narrowed = [
+            {
+                "prefix": e["prefix"],
+                "pattern": e["pattern"]
+                .replace(r"[-#]?", "[-]?")
+                .replace(r"[\s\-]?", r"[\s]?"),
+            }
+            for e in got_project["plant_id_prefixes"]
+        ]
+        check(
+            "the routing check is discriminating: NARROWING the separator "
+            "class IS reported against the source's declared set",
+            narrowed != got_project["plant_id_prefixes"]
+            and any(
+                "separator" in f
+                for f in routing_failures(
+                    narrowed, source_ids, separators=source_separators
+                )
+            ),
+        )
+
+        # --- the collision production refuses to start on -------------------
+        # `breeding_core`'s registry validator RAISES when two projects
+        # declare the same prefix case-insensitively. The lifted check used to
+        # `continue` on exactly that condition, so the worst collision was the
+        # only one it could never report.
+        twin = [
+            {"prefix": e["prefix"].swapcase(), "pattern": e["pattern"]}
+            for e in got_project["plant_id_prefixes"]
+        ]
+        check(
+            "the routing check is discriminating: a sibling project declaring "
+            "THIS project's prefix (case-insensitively) IS reported",
+            any(
+                "duplicate prefix" in f
+                for f in routing_failures(
+                    got_project["plant_id_prefixes"],
+                    source_ids,
+                    other_projects=[("evil-twin", twin)],
+                )
+            ),
+        )
+        check(
+            "production really rejects duplicated prefixes case-insensitively "
+            "(breeding_core registry validator)",
+            not PRODUCTION_CORE.exists()
+            or (
+                "prefix.casefold()" in PRODUCTION_CORE.read_text(encoding="utf-8")
+                and "seen_prefixes" in PRODUCTION_CORE.read_text(encoding="utf-8")
+            ),
         )
 
         # --- the gate must see the registry-sourced routing fields -----------
