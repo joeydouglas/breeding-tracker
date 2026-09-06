@@ -1026,3 +1026,74 @@ green, zero warnings (`pytest -W error`);
 232/232 out-of-band checks across all five migrated projects on a clean tree
 (was 187 across four); `tracker.json` md5
 `dee45e00a1ae55cfa71463f2a45ac358` unchanged.
+
+---
+
+## Task 3.6 — `lantz` (the last of Phase 3's six migrations)
+
+**One `ProjectSpec` plus one per-project test module, again.** No production
+migration code, no shared harness and no shared contract check was changed —
+the fourth consecutive task whose entire diff is a spec entry and a test file.
+
+**Task 3.5's hand-off note was half right, and the half that was wrong is worth
+recording.** It predicted this task would need `expected_plant_defaults`
+narrowed for the plant carrying a real `corrected_reading`. It does not:
+`expected_plant_defaults` is consumed only by
+`test_source_plant_keys_are_exactly_the_inventoried_set` as an *allowance*
+(`plant_keys | expected_plant_defaults`), so the class default already admits
+Ltz01's 19th key, and narrowing it would have *removed* the allowance the other
+three plants rely on. The note's second prediction was correct:
+`test_corrected_reading_is_defaulted_and_never_invented` skips records whose
+source carries the key, so it passes unchanged. A hand-off note is a hypothesis,
+not a spec; this one was checked against the code before being acted on.
+
+**The bug that five projects structurally cannot see.** `lantz` holds the
+corpus's only real `corrected_reading` (Ltz01, `'Thanos' -> 'phenos'`). On
+every other project the field is absent from the source and `null` is the
+correct migrated value — which is *also* what a writer that ignored the source
+and always materialised the template default would produce. That mutant (A) is
+byte-invisible on all five earlier projects and fails on the `[lantz]`
+parametrization alone. This is the clearest case in Phase 3 of a project whose
+value is not "more records" but "the only record that can distinguish two
+implementations", and it argues for keeping the corpus gate at `--all` rather
+than sampling projects.
+
+**Uniqueness claims were checked against the other five trackers before being
+written, and two were dropped.** Tasks 3.3–3.5 all needed review passes to
+narrow overclaimed "first"/"only" statements. Here the candidate claims were
+tested first: `photos_drive_url == ''` on every plant is **identical** to
+spaced-paste, and Ltz07's keeper tab emoji contradicting its culled status is
+**mirrored** by paloma-coma's PC04. Both are stated in the spec's notes as
+explicitly *not* unique. The claims that survived — sole `corrected_reading`
+carrier, sole zero-default record, sole mixed-case prefix, sole single-status
+roster, sole resolved-only `notes_meta` — are each asserted corpus-wide against
+the other specs' real trackers rather than in a docstring, so a future project
+acquiring the property fails the claim loudly instead of rotting it into a
+false comment.
+
+**Mixed case is a third case, not a repeat of spaced-paste's.** An all-upper
+roster survives `.upper()` untouched and an all-lower roster survives
+`.lower()`, so each catches at most one normalisation. `Ltz` survives neither.
+Demonstrated rather than asserted: the upper-casing mutant (C) is caught by
+`{lantz, spaced-paste}` and the lower-casing one (D) by `{lantz, mule-fuel,
+honey-badger-haze, kibungan, paloma-coma}` — intersection `{lantz}`.
+
+**Report counts are re-measured, never copied.** Tasks 3.3 and 3.4 both needed
+follow-up commits to correct out-of-band counts quoted from an earlier report
+after shared checks had been added. Task 3.6's per-project table was measured
+at this commit on a clean tree; the spread (45/47/48/47/45/45) is real —
+kibungan runs 48 because its two prefixes make the dropped-entry tamper
+expressible, where single-prefix projects emit a `[NOTE]`.
+
+Final state: **708 tests** (was 659 at Task 3.5's close): +16 lantz tests, +33
+contract instances for the sixth spec (200 contract tests over 6 projects, up
+from 167 over 5). 100% green, zero warnings (`pytest -W error`).
+**277/277** out-of-band checks across all six projects on a clean tree (was
+232 across five). `lantz` `tracker.json` md5
+`12b5aaa3ba275cb2e989b0191153591d` unchanged.
+
+**Phase 3 is complete**: all 95 plant records across all six projects
+round-trip with zero field loss, and `PROJECT_SPECS` now covers the whole
+registry, so `tools/verify_migration.py --all` is a complete corpus gate rather
+than a partial one. Nothing has been written to any real repo; the real
+migration write remains a separate deliberate action for a later phase.
