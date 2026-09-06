@@ -834,3 +834,58 @@ Final state: 527 tests (was 488), 100% green, zero warnings (`pytest -W error`);
 the +40 are kibungan's own, including the new dropped-entry tamper);
 `tracker.json` md5 `c1bb1e3bc31ec2f3ae0c0601e5a59647` unchanged, registry and
 the nested dashboard repo untouched.
+
+## Task 3.4: routing checks belong to every project, not to the one that found them
+
+`paloma-coma` was registered with **one `ProjectSpec`**; the shared contract and
+the spec-driven verifier picked it up with no per-project harness, the second
+consecutive task where that held. No production migration code changed.
+
+Its data closes a gap the earlier projects could not express: **all ten**
+nullable plant columns — `sex`, `germ_date`, `veg_start`, `flower_flip`,
+`harvest_date`, `vigor`, `structure`, `terpene_notes`, `issues`,
+`selection_notes` — are null on every plant (50 of its 90 plant field values).
+No earlier project has all ten empty at once, so it is the first data that can
+catch a writer omitting an entirely-null column or a reader materialising only
+keys it has seen carry a value; both round-trip mule-fuel, honey-badger and
+kibungan cleanly and lose ten fields per plant here. The check is deliberately
+two-layered — `is None` through the reader **and** `field: null` in the bytes —
+because reading through the schema fills a *missing* key with the template
+default, which is also `None`, so a reader-only assertion cannot tell a
+preserved null from a re-invented one. Mutation-confirmed: dropping null-valued
+keys in `write_plant` leaves the reader layer green and fails only the bytes.
+
+The larger change is a correction to Task 3.3's own judgement. That task wrote
+"compile the migrated patterns and actually route the real IDs" as a
+**kibungan-only** test because two prefixes made mis-routing visible there
+first. But nothing about the property is multi-prefix, and scoping it to the
+project that discovered it left the other four single-prefix projects covered by
+*string equality against `registry.json`* alone — which proves the migration
+copied the registry faithfully and says nothing about whether the result routes
+anything. That is the same duplication-by-omission that let Tasks 3.1 and 3.2
+drift; the fix is the same as before, move it into the shared layer.
+
+Two generic checks now run for every project, compiled out of the *migrated
+markdown*: each pattern matches exactly its own family's real IDs with every ID
+routed by exactly one pattern (which also catches a cross-family collision, not
+expressible on a single-prefix project before), and each ID is found inside
+`checked <ID> today` prose with the **captured group** equal to the right
+number, while `X<ID>` must not match — the negative is what proves the boundary
+construct survived rather than being silently dropped. The same check went into
+`tools/verify_migration.py`, so it is proven out-of-band too.
+
+Mutation-confirmed on paloma-coma, whose single `\bPC[\s\-]?(\d{1,2})\b` was
+previously covered by equality alone: perturbing the registry pattern to a
+plausible-looking but broken `\bPC[\s\-]?(\d{1,2}3})\b` leaves the migrated
+markdown **equal** to the registry — equality check green — while it routes
+zero of the five real IDs. Only the lifted behavioural check fails.
+
+Kibungan's module keeps exactly what its data alone exercises: the `(?i)` flag
+against lowercase text, the `[-#]?\s*` separator class, the `(?<![A-Z0-9])`
+lookbehind against an alphanumeric neighbour, and the dropped-second-prefix
+tamper. Its generic half was deleted, not left to drift alongside the contract's.
+
+Final state: 570 tests (was 527), 100% green, zero warnings (`pytest -W error`);
+159/159 out-of-band checks across all four projects on a clean tree (was 116);
+`tracker.json` md5 `4e59e7b1896f885767824bbacbcef437` unchanged, registry and
+every sibling project untouched.
