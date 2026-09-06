@@ -781,3 +781,56 @@ Final state: 488 tests (was 477), 100% green, zero warnings (`pytest -W error`);
 76/76 out-of-band checks across both projects on a clean tree (was 72 — the +4
 are the new pre-run cleanliness claims, 2 repos x 2 projects); the reviewer's
 dirty-baseline repro now FAILS with exit 1 and names every offending path.
+
+## Task 3.3: the harness pays for itself, and multi-prefix routing
+
+`kibungan-pheno-hunt` was registered by adding **one `ProjectSpec`** — 40 lines
+of data. The 27-case shared acceptance contract parametrized over it
+automatically and `tools/verify_migration.py` accepted the new slug with no
+script written. No production migration code changed (`git diff` on
+`tracker_migration.py`, `plant_markdown.py`, `project_markdown.py` is empty for
+this commit). Task 3.2, by contrast, cost ~700 lines of duplicated acceptance
+module plus a ~450-line verifier copy.
+
+The project's value is that its data is the first to expose a real gap in what
+the earlier projects could prove. `registry.json` gives it **two** plant-ID
+prefixes (`PK` and `PL`) for one landrace population. Every project before it
+had exactly one, so a migration reading `plant_id_prefixes[0]`, or flattening
+the list, would have passed Tasks 3.1 and 3.2 unnoticed and then silently
+stopped routing every `PL` Discord note — three of thirteen plants.
+
+Two consequences, both kept in the shared layer rather than in this project's
+module:
+
+* **The gate's `plant_id_prefixes` tamper was too coarse.** It blanked the list
+  to `[]`, which cannot distinguish a gate comparing the list's *contents* from
+  one merely checking it is non-empty. With two prefixes the realistic
+  regression is losing ONE entry: the list stays non-empty and stays correct
+  for ten of thirteen plants. `verify_migration.py` now derives that tamper for
+  any project with more than one prefix, and prints a `[NOTE]` for the ones
+  whose data cannot express it instead of passing silently — the same
+  honest-skip pattern already used for mule-fuel's non-discriminating
+  `auto_create`.
+* **String equality on a regex is not the property that matters.** The
+  per-project tests compile the patterns *out of the migrated markdown* and run
+  them against the real IDs and against realistic free text. This is not
+  belt-and-braces: mutation-checked, stripping `(?i)` from the migrated file
+  leaves every ID still routing correctly while `checked pk-7 today` stops
+  matching, so an ID-only assertion would have called that migration clean.
+  These patterns are also the first with `(?i)` and a `(?<![A-Z0-9])`
+  lookbehind, which exercises YAML escaping far harder than `\bXX[\s\-]?\b`.
+
+Two smaller firsts, both pinned: `google_sheet_url` is `''` while
+`google_sheet_id` is `null` — the first project where the empty string and null
+sit side by side, so a reader normalising one into the other round-trips
+cleanly on both earlier projects and corrupts this one; and three plants carry
+a human "Review and confirm." note whose text disagrees with the recorded
+status. Migration preserves both verbatim: resolving a pending human decision
+during a data move is data loss, the same reasoning that kept honey-badger's
+factually stale `migration_note` intact.
+
+Final state: 527 tests (was 488), 100% green, zero warnings (`pytest -W error`);
+113/113 out-of-band checks across all three projects on a clean tree (was 76 —
+the +37 are kibungan's own, including the new dropped-entry tamper);
+`tracker.json` md5 `c1bb1e3bc31ec2f3ae0c0601e5a59647` unchanged, registry and
+the nested dashboard repo untouched.

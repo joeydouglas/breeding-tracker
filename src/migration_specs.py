@@ -104,7 +104,47 @@ HONEY_BADGER_HAZE = ProjectSpec(
     ),
 )
 
-#: Every project whose migration has been accepted. Task 3.3 appends here.
-PROJECT_SPECS = [MULE_FUEL, HONEY_BADGER_HAZE]
+KIBUNGAN = ProjectSpec(
+    slug="kibungan-pheno-hunt",
+    plant_count=13,
+    project_keys=frozenset(
+        {
+            "breeder_lineage",
+            "created",
+            "cross_name",
+            "drive_folders",
+            "genetics",
+            "github_pages_url",
+            "github_repo",
+            "google_sheet_id",
+            "google_sheet_url",
+            "last_updated",
+            "notes_meta",
+            "plants",
+        }
+    ),
+    plant_keys=_COMMON_PLANT_KEYS,
+    notes=(
+        "The FIRST project with more than one plant-ID prefix: registry "
+        "`plant_id_prefixes` carries both PK and PL for one landrace "
+        "population, so a migration that took only the first entry, or that "
+        "flattened the list, breaks ID routing for a third of this project's "
+        "plants. Its two patterns are also the first to use `(?i)` and a "
+        "`(?<!...)` lookbehind, so they exercise YAML escaping harder than the "
+        "single `\\b...\\b` patterns of the first two projects. Registry "
+        "auto_create is TRUE while the template default is false, so this is a "
+        "second discriminating case for Task 3.0 §8. `google_sheet_url` is the "
+        "EMPTY STRING while `google_sheet_id` is null -- the first project "
+        "where those two differ, so a reader coercing '' to None (or None to "
+        "'') is caught. notes_meta is present with a non-null `source_doc` and "
+        "a non-empty `flagged_ambiguities` list (empty on both earlier "
+        "projects). Every plant carries all 18 keys, so corrected_reading must "
+        "be the ONLY defaulted plant field. IDs are non-contiguous within both "
+        "families (PK01..PK19 skipping 8 numbers, PL05/PL06/PL15)."
+    ),
+)
+
+#: Every project whose migration has been accepted. Task 3.4 appends here.
+PROJECT_SPECS = [MULE_FUEL, HONEY_BADGER_HAZE, KIBUNGAN]
 
 SPECS_BY_SLUG = {spec.slug: spec for spec in PROJECT_SPECS}
