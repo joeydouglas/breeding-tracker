@@ -17,8 +17,9 @@ What makes this project's data different, and why each matters:
   (production compiles with `re.IGNORECASE`, so a pattern that re-locked its
   own case still routes the canonical spelling and drops the rest), and the
   **registry prefix** itself.
-* **The shortest prefix (2 chars), and one that is a common English bigram.**
-  `\\bsp\\b`-style boundaries are the only thing stopping `sp` from firing
+* **A 2-char prefix that is a common English bigram.** `MG`/`PK`/`PL`/`PC`
+  are the same length, but only `sp` occurs inside ordinary words, so
+  `\\bsp\\b`-style boundaries are the only thing stopping it from firing
   inside `wasp01` or `crisp 01`. A boundary lost during migration is a live
   mis-route into ordinary Discord prose, not a theoretical one.
 * **The source `plants` array is not in ID order.** It is stored `sp06, sp01,
@@ -27,9 +28,10 @@ What makes this project's data different, and why each matters:
   roster would write sp06's payload into `sp01.md` and still produce five
   files with five correct-looking IDs.
 * **`photos_drive_url` is the empty string on every plant.** The first
-  project where a *plant* field is `''` rather than a URL or `None`
-  (kibungan's `''` was at project level), so a writer or reader coercing `''`
-  to `None` — or `None` to `''` — loses it here and nowhere else.
+  *migrated* project where a *plant* field is `''` rather than a URL or `None`
+  (kibungan's `''` was at project level). `lantz` has the same shape but is
+  not migrated yet, so this is the first chance to catch a writer or reader
+  coercing `''` to `None` — or `None` to `''` — not the only one.
 * **`notes_meta` present while `genetics`/`breeder_lineage` are absent.** A
   project-default combination no earlier project has.
 
@@ -152,7 +154,9 @@ def test_the_id_field_inside_each_file_keeps_its_lowercase_form(migrated):
 def test_the_two_char_prefix_does_not_fire_inside_ordinary_prose(migrated):
     """`sp` is a common English bigram — the boundary is doing real work.
 
-    The shared routing check proves the pattern rejects one synthetic leading
+    Other 2-char prefixes exist (`MG`, `PK`, `PL`, `PC`); what is unique here
+    is that `sp` occurs inside ordinary words. The shared routing check proves
+    the pattern rejects one synthetic leading
     character (`Xsp01`). This project is the only one where the negative case
     is *real English*: `wasp01`, `crisp 01`, `esp 5` are the kind of thing
     people actually type, and a `\\b` eaten during migration turns each into a

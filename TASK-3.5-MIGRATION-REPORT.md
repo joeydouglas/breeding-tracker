@@ -83,8 +83,10 @@ places here:
 
 ### 3b. The two-character prefix — the boundary is doing real work
 
-`sp` is the **shortest prefix in the corpus and the only one that is a common
-English bigram**. The shared routing check proves the pattern rejects one
+`sp` is **joint-shortest in the corpus (2 chars, tied with `MG`, `PK`, `PL` and
+`PC`) and the only one that is a common English bigram**. Length alone is not
+what makes it risky — `MG`/`PK`/`PL`/`PC` are the same length and do not occur
+inside ordinary words. The shared routing check proves the pattern rejects one
 synthetic leading character (`Xsp01`); this is the only project where the
 negative case is real English. `wasp01 looks great`, `crisp 01 leaves`,
 `esp 5 was fine` and `gasp-01` are asserted not to match, compiled with
@@ -106,9 +108,12 @@ record-by-record rather than only in aggregate.
 
 ### 3d. The empty-string plant field
 
-`photos_drive_url` is `""` on all five plants — the **first project where a
-plant-level field is the empty string** rather than a URL or `None`
-(kibungan's `""` was at project level, on `google_sheet_url`). `''` and `None`
+`photos_drive_url` is `""` on all five plants — the **first *migrated* project
+where a plant-level field is the empty string** rather than a URL or `None`
+(kibungan's `""` was at project level, on `google_sheet_url`). It is not the
+only project whose data carries one: `lantz` (Task 3.6, not yet migrated) has
+`photos_drive_url == ""` on all four of its plants too, so this is the first
+opportunity to catch the coercion, not the only one. `''` and `None`
 are both falsy, so a reader coercing one to the other round-trips every earlier
 project cleanly and corrupts all five records here. Asserted through the schema
 reader *and* in the raw frontmatter (`photos_drive_url: ''`, and explicitly
@@ -129,7 +134,7 @@ the Mule Fuel cross's Nana Glue). `sp06`'s status is `active` — the one record
 whose status was *not* inferred from a tab emoji, and a flagged, still-open
 ambiguity — so a migration normalising statuses to the keeper/culled pair would
 erase it. The tab headings carry `☠️` (U+2620 U+FE0F) and `💚` (U+1F49A, a
-**non-BMP astral** character, the first in the corpus) inside a markdown body
+**non-BMP astral** character) inside a markdown body
 under YAML frontmatter; both are asserted to survive byte-for-byte.
 
 ## 4. Mutation testing — the new checks can actually fail

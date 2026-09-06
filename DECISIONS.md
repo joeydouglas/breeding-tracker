@@ -969,7 +969,10 @@ asserting it.
 
 **`''` at plant level.** kibungan proved `''` and `None` are distinguishable at
 *project* level (`google_sheet_url` vs `google_sheet_id`); `photos_drive_url`
-is `''` on all five plants here, the first time that is true of a plant field.
+is `''` on all five plants here, the first *migrated* project where that is
+true of a plant field. (`lantz`, still unmigrated, has the same shape on all
+four of its plants — so this is the first opportunity to catch the coercion,
+not the only project that would expose it.)
 Asserted in the raw frontmatter as well as through the reader, because reading
 a missing key returns the template default and hides the difference — the same
 reason Task 3.4 checks paloma-coma's nulls in the bytes. This project has both
