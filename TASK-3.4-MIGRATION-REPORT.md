@@ -161,8 +161,10 @@ after, measured with the system `md5sum` binary.
 | `tests/test_kibungan_migration.py` (generic routing check removed) | −1 |
 | **after** | **570 passed, 0 failed** (zero warnings, `filterwarnings = error`) |
 
-`tools/verify_migration.py --all`: **155/155 checks PASSED** (was 116 — the +39
-are paloma-coma's own, including its share of the new routing check).
+`tools/verify_migration.py --all`: **159/159 checks PASSED** on a clean tree
+(was 116 — +40 are paloma-coma's own and +3 are the new routing check on the
+three earlier projects). Per project: mule-fuel 38, honey-badger 40, kibungan
+41, paloma-coma 40.
 
 ## 7. What was NOT done (deliberately)
 
