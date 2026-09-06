@@ -401,3 +401,68 @@ paths is recorded as `failed` and that the failure names the uncommitted
 paths.
 
 Final state: 287 tests, 100% green, zero warnings (`pytest -W error`).
+
+## Task 3.1 — mule-fuel-x-nana-glue tracker.json -> markdown (sandbox-only)
+
+Phase 3's first of six per-project migrations. New module
+`src/tracker_migration.py` plus `tools/verify_mule_fuel_migration.py`.
+
+### Registry, not tracker, is the source for two fields
+
+Task 3.0 §8 flagged this as the migration's highest-risk item and it is
+handled as a hard failure rather than a fallback: `auto_create` and
+`plant_id_prefixes` exist in NO tracker.json, only in `registry.json`.
+`build_project_record` reads them from the registry entry, lets them
+OVERRIDE any same-named tracker key, and raises `TrackerMigrationError` if
+the registry entry (or either key on it) is missing. Silently taking the
+template defaults (`false` / `[]`) would produce a project.md that looks
+correct and breaks ID routing and auto-create.
+
+### Field additions are tracked separately from field preservation
+
+A migration that fills a missing field from a template default is doing the
+right thing, but conflating that with "the value round-tripped" would let a
+real loss hide behind a default. `MigrationSummary.defaulted_fields` records
+every materialised field per record; `verify_migration` reports only fields
+that were present in the source and are now missing or changed. For this
+project the defaults are `corrected_reading` (all 45 plants -- declared in
+the template, real on exactly one lantz plant), `photo_count` +
+`photos_drive_url` (MG07 alone), and `genetics`/`breeder_lineage`/
+`notes_meta` at project level.
+
+### Sandbox isolation is enforced, not documented
+
+Task 3.x's criterion (d) explicitly says an md5 check alone does not prove
+side-effect isolation (Codex I13). Five layers instead:
+
+1. `assert_sandbox_destination` refuses a non-empty destination, any path
+   inside a git work tree (unless `allow_git_repo=True`), and anything under
+   `~/.hermes/breeding/`. The live-data check is evaluated AFTER and
+   independently of the git opt-in, so `allow_git_repo=True` can never
+   become a blanket permission to write into live data.
+2. A static test asserts the module imports no `subprocess`/`socket`/
+   `urllib`/`http`/`requests`/`smtplib` and calls no `os.system`/`os.popen`
+   -- it physically cannot push, POST or message anyone.
+3. The real migration is run with all of those booby-trapped to raise.
+4. An `os.open` spy asserts every write-flagged path resolves inside the
+   sandbox.
+5. All 839 paths under the live project dir are fingerprinted (size +
+   mtime_ns) before and after; a write to a dashboard file or `.git` ref
+   that a single-file md5 would miss shows up here.
+
+Destination validation and ALL plant validation (ids, duplicates, unsafe
+filenames) run before the first byte is written, so a malformed tracker
+never leaves a half-written tree behind.
+
+### Verification is independent of the test suite
+
+`tools/verify_mule_fuel_migration.py` re-derives every acceptance claim from
+scratch -- including hashing via the system `md5sum` binary rather than
+Python's hashlib -- so a bug shared between the migration code and its own
+tests cannot hide. 20/20 checks pass.
+
+Result: 45/45 plants, 808 plant field values + 8 project field values with
+zero loss, tracker.json md5 `f55be8df99b8e94606c19b3730b830e4` unchanged.
+
+Final state: 347 tests (287 + 41 unit + 19 real-data), 100% green, zero
+warnings (`pytest -W error`).
