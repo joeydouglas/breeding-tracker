@@ -108,8 +108,17 @@ class MigrationSummary:
 class VerificationReport:
     """Structured result of re-reading a migration and diffing it back.
 
-    ``ok`` is True only when nothing at all was lost or altered. Every
-    container is keyed by record name (``"project"`` or a plant id).
+    ``ok`` is True only when nothing at all was lost or altered **and the
+    verification actually compared something**. Every container is keyed by
+    record name (``"project"`` or a plant id).
+
+    The counts are not decoration. Without them ``ok`` is a blind gate: an
+    inspection that silently degraded to a no-op (wrong output dir, a tracker
+    whose records all vanished, a reader returning nothing) records no
+    discrepancy and is indistinguishable from a clean migration. So the
+    report states how many records and field values it compared, and a run
+    that verified no field value at all is reported as a failure rather than
+    as success.
     """
 
     def __init__(self) -> None:
@@ -119,15 +128,25 @@ class VerificationReport:
         self.changed_fields: dict[str, list[dict[str, Any]]] = {}
         self.plant_count_source: int = 0
         self.plant_count_migrated: int = 0
+        #: Records (project + plants) that were actually re-read and diffed.
+        self.records_compared: int = 0
+        #: Individual source field values that were actually compared.
+        self.fields_compared: int = 0
 
     @property
     def plant_count_matches(self) -> bool:
         return self.plant_count_source == self.plant_count_migrated
 
     @property
+    def verified_something(self) -> bool:
+        """Whether this report is evidence of anything at all."""
+        return self.records_compared > 0 and self.fields_compared > 0
+
+    @property
     def ok(self) -> bool:
         return (
-            not self.missing_records
+            self.verified_something
+            and not self.missing_records
             and not self.extra_records
             and not self.lost_fields
             and not self.changed_fields
@@ -137,6 +156,9 @@ class VerificationReport:
     def as_dict(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
+            "verified_something": self.verified_something,
+            "records_compared": self.records_compared,
+            "fields_compared": self.fields_compared,
             "plant_count_source": self.plant_count_source,
             "plant_count_migrated": self.plant_count_migrated,
             "plant_count_matches": self.plant_count_matches,
@@ -340,6 +362,32 @@ def _plant_id(plant: Mapping[str, Any], index: int) -> str:
 # --------------------------------------------------------------- migrate ----
 
 
+def _rollback_partial_write(
+    created: list[Path], plants_dir: Path | None, target: Path | None
+) -> None:
+    """Best-effort removal of everything one failed migration created.
+
+    Only paths this run created are touched: a destination directory the
+    caller pre-created is emptied but kept, matching the sandbox guard, which
+    accepts an existing-but-empty destination. Best-effort by design — a
+    cleanup that itself fails must never mask the failure being reported, so
+    every step swallows its own errors and the caller re-raises the original
+    exception.
+    """
+    for path in reversed(created):
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001 - never mask the real failure
+            pass
+    for directory in (plants_dir, target):
+        if directory is None:
+            continue
+        try:
+            directory.rmdir()
+        except Exception:  # noqa: BLE001 - never mask the real failure
+            pass
+
+
 def migrate_tracker(
     tracker_path: str | Path,
     registry_path: str | Path,
@@ -394,24 +442,48 @@ def migrate_tracker(
     )
 
     # Everything is validated before the first byte is written, so a bad
-    # tracker never leaves a half-written tree behind.
-    target.mkdir(parents=True, exist_ok=True)
+    # tracker never leaves a half-written tree behind. Validation is not
+    # enough on its own, though: the write loop itself can fail partway
+    # (ENOSPC, a permission change, a writer bug on record N of M), and a
+    # half-written tree on disk is indistinguishable from a complete
+    # migration to anything that later inspects the directory. So the writes
+    # are wrapped: on any failure, everything this call created is removed
+    # and the original exception propagates unchanged.
+    destination_existed = target.exists()
     plants_dir = target / "plants"
-    plants_dir.mkdir(exist_ok=True)
+    plants_dir_existed = plants_dir.exists()
+    created: list[Path] = []
 
-    defaulted_fields: dict[str, list[str]] = {}
-    project_file = target / "project.md"
-    project_markdown.write_project(project_file, project_record, schema=project_schema)
-    if project_defaulted:
-        defaulted_fields["project"] = project_defaulted
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        plants_dir.mkdir(exist_ok=True)
 
-    plant_files: list[Path] = []
-    for plant_id, record, defaulted in prepared:
-        plant_file = plants_dir / f"{plant_id}.md"
-        plant_markdown.write_plant(plant_file, record, schema=plant_schema)
-        plant_files.append(plant_file)
-        if defaulted:
-            defaulted_fields[plant_id] = defaulted
+        defaulted_fields: dict[str, list[str]] = {}
+        project_file = target / "project.md"
+        # Registered before the write, not after: a writer that fails partway
+        # leaves a partial file that the rollback still has to remove.
+        created.append(project_file)
+        project_markdown.write_project(
+            project_file, project_record, schema=project_schema
+        )
+        if project_defaulted:
+            defaulted_fields["project"] = project_defaulted
+
+        plant_files: list[Path] = []
+        for plant_id, record, defaulted in prepared:
+            plant_file = plants_dir / f"{plant_id}.md"
+            created.append(plant_file)
+            plant_markdown.write_plant(plant_file, record, schema=plant_schema)
+            plant_files.append(plant_file)
+            if defaulted:
+                defaulted_fields[plant_id] = defaulted
+    except BaseException:
+        _rollback_partial_write(
+            created,
+            None if plants_dir_existed else plants_dir,
+            None if destination_existed else target,
+        )
+        raise
 
     return MigrationSummary(
         slug=slug,
@@ -439,6 +511,10 @@ def verify_migration(
     markdown. Fields the markdown has but the JSON did not (template defaults
     materialised for absent fields) are additions, not loss, and are not
     reported here — :attr:`MigrationSummary.defaulted_fields` records those.
+
+    The returned report counts the records and field values it compared, and
+    :attr:`VerificationReport.ok` is False when that count is zero: "found no
+    discrepancy" is only meaningful if something was actually inspected.
     """
     tracker = _read_json(tracker_path)
     target = Path(output_dir)
@@ -489,7 +565,9 @@ def _diff_record(
     got: Mapping[str, Any],
     report: VerificationReport,
 ) -> None:
+    report.records_compared += 1
     for field, original in source.items():
+        report.fields_compared += 1
         if field not in got:
             report.lost_fields.setdefault(name, []).append(field)
         elif got[field] != original:

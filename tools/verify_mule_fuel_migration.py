@@ -184,6 +184,69 @@ def main():
         ]
         check("all output confined to the sandbox dir", not outside)
 
+        # --- the gate must prove it inspected something ----------------------
+        # A verifier that silently degrades to a no-op reports no discrepancy
+        # and is otherwise indistinguishable from a clean migration, so the
+        # report's own evidence counts are checked against independently
+        # re-derived totals rather than trusted.
+        from tracker_migration import verify_migration
+
+        report = verify_migration(TRACKER, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+        expected_records = 1 + len(source_plants)
+        expected_fields = fields_checked + len(
+            [k for k in source if k != "plants"]
+        )
+        check(
+            "verification report is not vacuous",
+            report.ok and report.verified_something,
+            f"records={report.records_compared} fields={report.fields_compared}",
+        )
+        check(
+            "verification compared every record and field value",
+            report.records_compared == expected_records
+            and report.fields_compared == expected_fields,
+            f"expected records={expected_records} fields={expected_fields}",
+        )
+        check(
+            "verification of a never-migrated dir is reported as NOT ok",
+            not verify_migration(
+                TRACKER, Path(tmp) / "never-migrated", PROJECT_TEMPLATE, PLANT_TEMPLATE
+            ).ok,
+        )
+
+        # --- a mid-write failure must leave nothing behind -------------------
+        rollback_out = Path(tmp) / "rollback-probe"
+        real_write_plant = plant_markdown.write_plant
+        seen = {"n": 0}
+
+        def fail_midway(path, record, **kwargs):
+            seen["n"] += 1
+            if seen["n"] == 20:
+                raise OSError("simulated ENOSPC partway through the plant writes")
+            return real_write_plant(path, record, **kwargs)
+
+        plant_markdown.write_plant = fail_midway
+        try:
+            migrate_tracker(
+                TRACKER, REGISTRY, SLUG, rollback_out, PROJECT_TEMPLATE, PLANT_TEMPLATE
+            )
+            rolled_back = False
+            detail = "no exception raised"
+        except OSError:
+            rolled_back = not rollback_out.exists()
+            detail = (
+                "clean"
+                if rolled_back
+                else f"leftovers={sorted(p.name for p in rollback_out.rglob('*'))}"
+            )
+        finally:
+            plant_markdown.write_plant = real_write_plant
+        check(
+            "a failed write partway through 45 plants leaves no half-written tree",
+            rolled_back,
+            detail,
+        )
+
     check("sandbox directory removed after the run", not out.exists())
 
     tracker_md5_after = md5sum_via_system(TRACKER)

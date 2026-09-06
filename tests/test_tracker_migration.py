@@ -499,6 +499,9 @@ def test_verify_reports_an_ok_dict_shape(inputs, tmp_path):
     assert data["ok"] is True
     assert set(data) == {
         "ok",
+        "verified_something",
+        "records_compared",
+        "fields_compared",
         "plant_count_source",
         "plant_count_migrated",
         "plant_count_matches",
@@ -603,3 +606,195 @@ def test_migration_writes_nothing_outside_the_output_dir(inputs, tmp_path):
     assert written, "expected the migration to write something"
     outside = [p for p in written if not Path(p).resolve().is_relative_to(out.resolve())]
     assert not outside, f"wrote outside the sandbox: {outside}"
+
+
+# ------------------------------------- verification carries its evidence ----
+#
+# Code-quality round 4, Important #1: `report.ok` was a *blind* gate. It was
+# True whenever no discrepancy had been recorded, which is also what an
+# inspection that compared nothing at all looks like. A verifier that
+# silently degrades to a no-op and still returns ok=True is the one failure
+# mode a migration gate must not have, so the report now carries the count of
+# what it actually compared and refuses to pass vacuously.
+
+
+def _write_inputs(tmp_path, tracker, registry=None):
+    tracker_path = tmp_path / "tracker.json"
+    tracker_path.write_text(json.dumps(tracker), encoding="utf-8")
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(registry if registry is not None else _registry()), encoding="utf-8"
+    )
+    return tracker_path, registry_path
+
+
+def test_verification_reports_how_many_records_and_fields_it_compared(
+    inputs, tmp_path
+):
+    """The gate must prove it did the work, not merely find no problem."""
+    tracker_path, registry_path = inputs
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+
+    report = verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+
+    assert report.ok, report.as_dict()
+    # 1 project record + 1 plant record.
+    assert report.records_compared == 2
+    # 8 project fields (9 tracker keys minus 'plants') + 9 plant fields.
+    assert report.fields_compared == 17
+
+
+def test_verification_that_compared_nothing_is_not_ok(tmp_path):
+    """A vacuous pass must be reported as a failure, not as success."""
+    tracker_path, registry_path = _write_inputs(tmp_path, {"plants": []})
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+
+    report = verify_migration(tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+
+    assert report.fields_compared == 0
+    assert not report.ok, "a verification that compared no field value is blind"
+    assert not report.verified_something
+
+
+def test_verification_of_an_unwritten_tree_is_not_silently_ok(inputs, tmp_path):
+    """Pointing the gate at a directory no migration wrote must fail loudly."""
+    tracker_path, _ = inputs
+    empty = tmp_path / "never-migrated"
+    empty.mkdir()
+
+    report = verify_migration(tracker_path, empty, PROJECT_TEMPLATE, PLANT_TEMPLATE)
+
+    assert not report.ok
+    assert report.fields_compared == 0
+    assert "project" in report.missing_records
+
+
+def test_verification_counts_appear_in_the_report_dict(inputs, tmp_path):
+    tracker_path, registry_path = inputs
+    out = tmp_path / "sandbox"
+    _run(tracker_path, registry_path, out)
+    data = verify_migration(
+        tracker_path, out, PROJECT_TEMPLATE, PLANT_TEMPLATE
+    ).as_dict()
+    assert data["records_compared"] == 2
+    assert data["fields_compared"] == 17
+
+
+# ---------------------------------------- rollback on a mid-write failure ----
+#
+# Code-quality round 4, Important #2: all *validation* ran before the first
+# byte, but the write loop itself had no guard. A failure partway through
+# (ENOSPC, a permission change, a writer bug on record N of M) left a
+# half-written tree on disk that looks exactly like a complete migration to
+# anything that later inspects the directory.
+
+
+def _multi_plant_tracker():
+    tracker = _tracker()
+    tracker["plants"] = [
+        {"id": f"TT0{n}", "cross": "Test Cross", "observation_log": f"note {n}\n"}
+        for n in (1, 2, 3)
+    ]
+    return tracker
+
+
+def test_a_failed_plant_write_leaves_no_half_written_tree(tmp_path, monkeypatch):
+    import plant_markdown
+
+    tracker_path, registry_path = _write_inputs(tmp_path, _multi_plant_tracker())
+    out = tmp_path / "sandbox"
+
+    real_write_plant = plant_markdown.write_plant
+    calls = {"n": 0}
+
+    def failing_write_plant(path, record, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk full")
+        return real_write_plant(path, record, **kwargs)
+
+    monkeypatch.setattr(plant_markdown, "write_plant", failing_write_plant)
+
+    with pytest.raises(OSError, match="disk full"):
+        _run(tracker_path, registry_path, out)
+
+    assert not out.exists(), (
+        f"a failed migration must not leave a tree behind: "
+        f"{sorted(p.name for p in out.rglob('*'))}"
+    )
+
+
+def test_a_failed_project_write_leaves_no_half_written_tree(tmp_path, monkeypatch):
+    import project_markdown
+
+    tracker_path, registry_path = _write_inputs(tmp_path, _multi_plant_tracker())
+    out = tmp_path / "sandbox"
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(project_markdown, "write_project", boom)
+
+    with pytest.raises(OSError, match="disk full"):
+        _run(tracker_path, registry_path, out)
+
+    assert not out.exists()
+
+
+def test_rollback_keeps_a_preexisting_empty_destination_directory(
+    tmp_path, monkeypatch
+):
+    """Roll back only what this run created; don't delete the caller's dir."""
+    import plant_markdown
+
+    tracker_path, registry_path = _write_inputs(tmp_path, _multi_plant_tracker())
+    out = tmp_path / "sandbox"
+    out.mkdir()  # caller pre-created it (empty, so the sandbox guard allows it)
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(plant_markdown, "write_plant", boom)
+
+    with pytest.raises(OSError, match="disk full"):
+        _run(tracker_path, registry_path, out)
+
+    assert out.is_dir(), "a pre-existing destination must survive the rollback"
+    assert not any(out.iterdir()), "but it must be left empty, not half-written"
+
+
+def test_rollback_does_not_mask_the_original_failure(tmp_path, monkeypatch):
+    """A rollback that itself fails must not replace the real exception."""
+    import plant_markdown
+
+    tracker_path, registry_path = _write_inputs(tmp_path, _multi_plant_tracker())
+    out = tmp_path / "sandbox"
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(plant_markdown, "write_plant", boom)
+
+    real_unlink = Path.unlink
+
+    def failing_unlink(self, *args, **kwargs):
+        raise PermissionError("cannot remove")
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    with pytest.raises(OSError, match="disk full"):
+        _run(tracker_path, registry_path, out)
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+
+
+def test_successful_migration_is_untouched_by_the_rollback_guard(inputs, tmp_path):
+    """The guard must be inert on the happy path."""
+    tracker_path, registry_path = inputs
+    out = tmp_path / "sandbox"
+    summary = _run(tracker_path, registry_path, out)
+    assert summary.plant_count == 1
+    assert (out / "project.md").is_file()
+    assert (out / "plants" / "TT01.md").is_file()

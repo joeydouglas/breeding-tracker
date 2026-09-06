@@ -466,3 +466,49 @@ zero loss, tracker.json md5 `f55be8df99b8e94606c19b3730b830e4` unchanged.
 
 Final state: 347 tests (287 + 41 unit + 19 real-data), 100% green, zero
 warnings (`pytest -W error`).
+
+### Task 3.1 code-quality review round 4
+
+Two Important findings in the migration/verification tooling.
+
+**1. `verify_migration`'s gate was blind.** `report.ok` was True whenever
+no discrepancy had been *recorded* — which is also exactly what an
+inspection that compared nothing at all looks like. Point the verifier at
+the wrong directory, hand it a tracker whose records have vanished, or let
+a reader silently return nothing, and it reported a clean migration. That
+is the one failure mode a zero-data-loss gate must not have, because it
+fails toward "accept". `VerificationReport` now counts the records and
+field values it actually compared, exposes `verified_something`, and `ok`
+is False when that count is zero. Vacuous truth is now a failure, not a
+pass. On the real tracker the gate reports 46 records / 816 field values;
+`as_dict()` gained `verified_something`/`records_compared`/
+`fields_compared`, and the pre-existing dict-shape test was updated to
+match the widened contract.
+
+**2. No rollback on a mid-write failure.** Round 3 established that *all
+validation* runs before the first byte, so a malformed tracker can't leave
+a half-written tree. That guarantee didn't cover the write loop itself:
+ENOSPC, a permission change, or a writer bug on record N of M left a
+partial tree on disk that is indistinguishable from a complete migration to
+anything that later inspects the directory — including a human deciding the
+migration is done. The writes are now wrapped, and `_rollback_partial_write`
+removes everything the failed call created before the original exception
+propagates unchanged. Three deliberate details: paths are registered
+*before* their write (a writer failing partway still leaves a partial file
+to clean up), a destination directory the caller pre-created is emptied but
+kept (matching the sandbox guard, which accepts existing-but-empty), and
+cleanup is best-effort with swallowed errors so a failing rollback never
+masks the real failure — the same convention `migration.py::_rollback` uses.
+`except BaseException` is intentional: a KeyboardInterrupt mid-migration
+must not leave a half-written tree either.
+
+Both fixes were driven test-first (9 new tests, all failing for the right
+reason before the fix) and are additionally proven against the real
+45-plant tracker by `tools/verify_mule_fuel_migration.py`, which grew four
+checks: the report's counts are re-derived independently rather than
+trusted, a never-migrated directory must be reported NOT ok, and a
+simulated ENOSPC on plant 20 of 45 must leave nothing behind. 24/24 checks
+pass; `tracker.json` md5 `f55be8df99b8e94606c19b3730b830e4` unchanged and
+all 839 live paths unchanged.
+
+Final state: 356 tests, 100% green, zero warnings (`pytest -W error`).
