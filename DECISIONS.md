@@ -979,18 +979,50 @@ reason Task 3.4 checks paloma-coma's nulls in the bytes. This project has both
 at once: nine always-null columns *and* a neighbouring always-empty-string one,
 so conflating them is live rather than stylistic.
 
-**What was deliberately NOT done.** No check from this module was lifted into
-the shared contract. Task 3.4 lifted kibungan's routing checks because they
-were generic checks that happened to be discovered on one project's data; these
-are the opposite — each one is inexpressible on a project without lowercase
-IDs, an unsorted array or an empty-string plant field, and parametrizing them
-over `PROJECT_SPECS` would produce four vacuous passes per check. The premise
-of each is asserted separately (`test_this_project_is_the_first_with_lowercase_
-plant_ids`, `test_the_source_array_is_not_in_id_order`,
+**What was deliberately NOT done.** No check *unique to this project's data*
+was lifted into the shared contract. Task 3.4 lifted kibungan's routing checks
+because they were generic checks that happened to be discovered on one
+project's data; the lowercase-ID, unsorted-array and empty-string-plant-field
+checks are the opposite — each one is inexpressible on a project without those
+properties, and parametrizing them over `PROJECT_SPECS` would produce four
+vacuous passes per check. The premise of each is asserted separately
+(`test_this_project_is_the_first_with_lowercase_plant_ids`,
+`test_the_source_array_is_not_in_id_order`,
 `test_photos_drive_url_is_the_empty_string_on_every_plant`) so the fixture
 cannot silently stop discriminating.
 
-Final state: 656 tests (was 606), 100% green, zero warnings (`pytest -W error`);
+**What WAS lifted afterwards (review follow-up).** The always-null-in-the-bytes
+check was the exception, and it had already drifted the way Task 3.1/3.2's
+copies did. paloma-coma and spaced-paste each carried their own copy of "every
+column that is null on every plant must appear as `field: null` in the migrated
+frontmatter", over a hand-maintained field list — while honey-badger-haze and
+kibungan, whose data has the same nine always-null columns, had only a
+reader-level check and never got the bytes-level one at all. The property is
+generic (it is about the writer, not about any project's data); only the *field
+set* is per-project, and that set is derivable from each tracker. It is now
+`test_fields_null_on_every_plant_are_written_as_explicit_yaml_nulls` in the
+shared contract, parametrized over `PROJECT_SPECS`, deriving the set by
+intersecting keys across records first (so mule-fuel's MG07, which is *missing*
+`photos_drive_url` rather than carrying a null, stays a defaulting question).
+The per-project modules keep only the premise assertion that pins *which*
+fields those are — ten at once for paloma-coma, nine-plus-a-neighbouring-`''`
+for spaced-paste, nine-plus-a-populated-`selection_notes` for
+honey-badger-haze. Mutation-verified: making `write_plant` skip `None` values
+fails the new check on all five projects, and before the lift it failed on only
+two.
+
+**Routing flags are imported, never re-spelled.** spaced-paste's two routing
+tests compiled the migrated patterns with a literal `re.IGNORECASE` instead of
+`migration_harness.ROUTING_FLAGS`. The whole point of `ROUTING_FLAGS` is that
+one constant carries production's flags and one assertion holds it to
+`breeding_core._compile_prefixes`' source; a module that re-spells the literal
+would keep testing the old matcher if production ever changed. Both now import
+the constant, as kibungan's module and the shared contract already did.
+Mutation-verified: flipping `ROUTING_FLAGS` to `re.NOFLAG` now fails
+spaced-paste's case-insensitivity test, which it did not before.
+
+Final state: 659 tests (was 656 at Task 3.5's close, 606 before it), 100%
+green, zero warnings (`pytest -W error`);
 232/232 out-of-band checks across all five migrated projects on a clean tree
 (was 187 across four); `tracker.json` md5
 `dee45e00a1ae55cfa71463f2a45ac358` unchanged.

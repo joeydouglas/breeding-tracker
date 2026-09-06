@@ -179,8 +179,11 @@ assertion in a docstring.
 
 ## 6. Final state
 
-- **656 tests**, 100% green, zero warnings (`pytest -W error`). Was 606: +18
-  spaced-paste tests, +32 contract instances for the new spec.
+- **659 tests**, 100% green, zero warnings (`pytest -W error`). Was 606 before
+  Task 3.5: +18 spaced-paste tests, +32 contract instances for the new spec,
+  then +3 net from the review follow-up (the always-null-in-the-bytes check
+  lifted into the shared contract as five parametrized instances, replacing two
+  per-project copies).
 - **45/45** out-of-band checks for `spaced-paste` on a clean tree;
   **232/232** across all five migrated projects (`--all`).
 - `tracker.json` md5 `dee45e00a1ae55cfa71463f2a45ac358` unchanged.

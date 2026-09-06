@@ -160,19 +160,27 @@ def test_the_two_char_prefix_does_not_fire_inside_ordinary_prose(migrated):
     character (`Xsp01`). This project is the only one where the negative case
     is *real English*: `wasp01`, `crisp 01`, `esp 5` are the kind of thing
     people actually type, and a `\\b` eaten during migration turns each into a
-    silent mis-route onto a real plant. Compiled with production's flags out
-    of the MIGRATED markdown, not the registry.
+    silent mis-route onto a real plant. Compiled with `ROUTING_FLAGS` —
+    production's flags, imported from `migration_harness` rather than spelled
+    `re.IGNORECASE` here — out of the MIGRATED markdown, not the registry.
+
+    Hardcoding the flag in this module would mean that if production ever
+    changed how it compiles routing patterns, `migration_harness.ROUTING_FLAGS`
+    and its parity assertion against `breeding_core` would move while this
+    module silently kept testing the old matcher.
     """
+    from migration_harness import ROUTING_FLAGS
+
     _, out = migrated
     entry = _project(out)["plant_id_prefixes"][0]
-    compiled = re.compile(entry["pattern"], re.IGNORECASE)
+    compiled = re.compile(entry["pattern"], ROUTING_FLAGS)
 
     for text in ("wasp01 looks great", "crisp 01 leaves", "esp 5 was fine", "gasp-01"):
         assert not compiled.search(text), f"{text!r} mis-routed"
 
     # Discriminating: the same probes DO fire once the boundary is removed,
     # so this is proving the boundary rather than a quirk of the probe text.
-    unbounded = re.compile(entry["pattern"].replace(r"\b", ""), re.IGNORECASE)
+    unbounded = re.compile(entry["pattern"].replace(r"\b", ""), ROUTING_FLAGS)
     assert unbounded.search("wasp01 looks great")
 
 
@@ -181,11 +189,15 @@ def test_routing_is_case_insensitive_in_both_directions(migrated):
 
     So the uppercase spelling people type (`SP01`, `Sp 3`) must route to the
     same plant, and the captured group — which the monitor uses to pick the
-    record — must be the same number in either case.
+    record — must be the same number in either case. Compiled with
+    `ROUTING_FLAGS` so this module and the shared contract cannot drift onto
+    different matchers.
     """
+    from migration_harness import ROUTING_FLAGS
+
     _, out = migrated
     compiled = re.compile(
-        _project(out)["plant_id_prefixes"][0]["pattern"], re.IGNORECASE
+        _project(out)["plant_id_prefixes"][0]["pattern"], ROUTING_FLAGS
     )
     for plant_id in EXPECTED_IDS:
         digits = plant_id[2:]
@@ -289,26 +301,23 @@ def test_empty_photo_lists_and_counts_stay_consistent(migrated):
 # ------------------------------------------------- this project's records ---
 
 
-def test_the_nine_always_null_fields_survive_as_explicit_nulls(migrated):
-    """Nine of the ten nullable columns are null on every plant.
+def test_exactly_nine_of_the_ten_nullable_columns_are_null_on_every_plant():
+    """Guards the premise: `selection_notes` is populated on sp06 alone.
 
-    `None` is asserted explicitly, not falsiness: `''`, `[]` and `0` are all
-    falsy and all wrong — and this is the one project where `''` is a real,
-    *different* value on a neighbouring field, so conflating them is live.
+    That those nine survive — through the reader AND as explicit `field: null`
+    in the migrated bytes — is asserted for every project by the shared
+    contract's `test_fields_null_on_every_plant_are_written_as_explicit_yaml_
+    nulls`, over the set it derives from each tracker. What is unique here is
+    *which* fields those are: this is the one project where `''` is a real,
+    different value on a neighbouring plant field, so a coercion that
+    conflated `''` with `None` would move `photos_drive_url` into this set
+    and the mismatch is caught here rather than passing a weaker set.
     """
-    _, out = migrated
     plants = tracker_json(SPEC)["plants"]
     empty = sorted(k for k in plants[0] if all(p[k] is None for p in plants))
     assert empty == ALL_NULL_FIELDS
-    for plant_id in EXPECTED_IDS:
-        got = _plant(out, plant_id)
-        frontmatter = (out / "plants" / f"{plant_id}.md").read_text(
-            encoding="utf-8"
-        ).split("\n---\n", 1)[0]
-        for field in ALL_NULL_FIELDS:
-            assert field in got, f"{plant_id}.{field} was dropped entirely"
-            assert got[field] is None, f"{plant_id}.{field} = {got[field]!r}"
-            assert f"{field}: null" in frontmatter, f"{plant_id}.{field}"
+    assert "selection_notes" not in empty
+    assert "photos_drive_url" not in empty
 
 
 def test_corrected_reading_is_the_only_defaulted_plant_field(migrated):

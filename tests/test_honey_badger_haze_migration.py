@@ -142,32 +142,25 @@ def test_photos_and_photo_counts_survive_including_the_one_photoless_plant(migra
     assert len(photoless) == 1
 
 
-def test_nullable_and_always_null_plant_fields_stay_null(migrated):
-    """Task 3.0 §3/§9.5: types come from the template, never inferred from
-    observed data. `selection_notes` is non-null on exactly one plant here, so
-    a reader that coerced nulls to "" would be caught."""
+def test_selection_notes_is_populated_on_exactly_one_plant(migrated):
+    """Guards the premise the shared null checks lean on here.
+
+    The nine columns that are null on every plant are held to surviving as
+    explicit `field: null` in the migrated bytes by the shared contract's
+    `test_fields_null_on_every_plant_are_written_as_explicit_yaml_nulls`, over
+    the set it derives from this tracker. What is unique to this project's
+    data is that `selection_notes` is NOT in that set — it is non-null on
+    HBH15 alone — so a reader that coerced nulls to `""` (or `""` to null)
+    would change which fields the derived set contains and is caught here.
+    """
     from plant_markdown import load_schema, read_plant
 
     _, out = migrated
     schema = load_schema(PLANT_TEMPLATE)
-    always_null = (
-        "germ_date",
-        "veg_start",
-        "flower_flip",
-        "harvest_date",
-        "vigor",
-        "structure",
-        "issues",
-        "sex",
-    )
     with_selection_notes = []
     for plant in tracker_json(SPEC)["plants"]:
         got = read_plant(out / "plants" / f"{plant['id']}.md", schema=schema)
-        for field in always_null:
-            assert plant[field] is None, f"source drifted: {plant['id']}.{field}"
-            assert got[field] is None, f"{plant['id']}.{field}"
-        assert got["terpene_notes"] is None
-        assert got["selection_notes"] == plant["selection_notes"]
+        assert got["selection_notes"] == plant["selection_notes"], plant["id"]
         if plant["selection_notes"] is not None:
             with_selection_notes.append(plant["id"])
     assert with_selection_notes == ["HBH15"]

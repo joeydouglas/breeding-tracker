@@ -182,6 +182,63 @@ def test_every_inventoried_plant_field_survives_on_every_plant(
     assert compared, "compared nothing -- the check would be vacuous"
 
 
+def _always_null_plant_fields(spec):
+    """Fields carried by EVERY plant of `spec` and null on every one of them.
+
+    Derived from the live tracker rather than hand-listed, so a project whose
+    data changes shape is held to its current data instead of to a literal
+    list that has to be edited in a per-project module. Keys are intersected
+    across records first: mule-fuel's MG07 lacks `photos_drive_url`, and a
+    field that is merely *absent* from a record is a defaulting question, not
+    a preserved-null one.
+    """
+    plants = _tracker_json(spec)["plants"]
+    common = set(plants[0])
+    for plant in plants:
+        common &= set(plant)
+    return sorted(k for k in common if all(p[k] is None for p in plants))
+
+
+@spec_param
+def test_fields_null_on_every_plant_are_written_as_explicit_yaml_nulls(
+    spec, tmp_path, no_side_effects
+):
+    """A preserved null must be visible IN THE BYTES, not merely re-derivable.
+
+    Reading through the schema fills a missing key with the template default —
+    which for every nullable column is also `None` — so a reader-level check
+    cannot tell a null that survived the round-trip from one the reader
+    silently re-invented for a column the writer dropped entirely. The file's
+    own frontmatter can.
+
+    paloma-coma and spaced-paste each carried a copy of this loop over a
+    hand-maintained field list, and honey-badger-haze and kibungan — whose
+    data has the same nine always-null columns — never got one at all. That
+    is exactly the drift the shared contract exists to stop, so the check is
+    parametrized over `PROJECT_SPECS` and the field set is derived from each
+    tracker. Per-project modules keep only the assertion that pins *which*
+    fields those are, which is the part genuinely unique to their data.
+    """
+    _, out = _migrate(spec, tmp_path)
+    fields = _always_null_plant_fields(spec)
+    assert fields, "no always-null plant field -- the check would be vacuous"
+
+    from plant_markdown import load_schema, read_plant
+
+    schema = load_schema(PLANT_TEMPLATE)
+    for plant in _tracker_json(spec)["plants"]:
+        plant_id = plant["id"]
+        path = out / "plants" / f"{plant_id}.md"
+        got = read_plant(path, schema=schema)
+        frontmatter = path.read_text(encoding="utf-8").split("\n---\n", 1)[0]
+        for field in fields:
+            assert field in got, f"{plant_id}.{field} was dropped entirely"
+            assert got[field] is None, f"{plant_id}.{field} = {got[field]!r}"
+            assert f"{field}: null" in frontmatter, (
+                f"{plant_id}.{field} is not an explicit null in the file"
+            )
+
+
 @spec_param
 def test_the_whole_plants_array_reconstructs_from_markdown(
     spec, tmp_path, no_side_effects

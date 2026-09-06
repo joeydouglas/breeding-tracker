@@ -90,47 +90,22 @@ def _project(out):
 
 
 def test_this_project_is_the_first_with_every_nullable_field_empty():
-    """Guards the premise of the checks below.
+    """Guards the premise the shared null check leans on here.
 
-    If a value were ever filled in here, the all-null assertions would still
-    pass while testing something weaker, so the fixture's own discriminating
-    power is asserted rather than assumed.
+    That the nulls survive — through the reader AND as explicit `field: null`
+    in the migrated bytes — is asserted for every project by the shared
+    contract's `test_fields_null_on_every_plant_are_written_as_explicit_yaml_
+    nulls`, over the set it derives from each tracker. What is unique to this
+    project is *which* fields those are: all ten nullable columns at once, so
+    a writer that omitted an entirely-null column loses ten fields per plant
+    here. If a value were ever filled in upstream, the derived set would
+    shrink and the shared check would silently test something weaker, so the
+    fixture's own discriminating power is pinned rather than assumed.
     """
     plants = tracker_json(SPEC)["plants"]
     empty = sorted(k for k in plants[0] if all(p[k] is None for p in plants))
     assert empty == ALL_NULL_FIELDS
     assert len(empty) == 10
-
-
-def test_all_ten_always_null_fields_survive_as_null_on_every_plant(migrated):
-    """The failure this project alone can catch.
-
-    A writer that omitted an entirely-null column, or a reader that only
-    materialised keys it had seen carry a value, round-trips every earlier
-    project cleanly and loses ten fields per plant here. `None` is asserted
-    explicitly, not falsiness: `''`, `[]` and `0` are all falsy and all wrong.
-    """
-    _, out = migrated
-    for plant_id in EXPECTED_IDS:
-        got = _plant(out, plant_id)
-        for field in ALL_NULL_FIELDS:
-            assert field in got, f"{plant_id}.{field} was dropped entirely"
-            assert got[field] is None, f"{plant_id}.{field} = {got[field]!r}"
-
-
-def test_the_always_null_fields_are_written_as_explicit_yaml_nulls(migrated):
-    """Present in the file as `field: null`, not merely absent-and-defaulted.
-
-    Reading through the schema would fill a missing key with the template
-    default (also `None`), so a reader-level check alone cannot distinguish a
-    preserved null from a silently re-invented one. The bytes can.
-    """
-    _, out = migrated
-    for plant_id in EXPECTED_IDS:
-        text = (out / "plants" / f"{plant_id}.md").read_text(encoding="utf-8")
-        frontmatter = text.split("\n---\n", 1)[0]
-        for field in ALL_NULL_FIELDS:
-            assert f"{field}: null" in frontmatter, f"{plant_id}.{field}"
 
 
 def test_corrected_reading_is_the_only_defaulted_plant_field(migrated):
