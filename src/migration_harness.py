@@ -36,6 +36,7 @@ by the migration would move and a `git gc` would not.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,12 +74,16 @@ def _run(argv, *, cwd, check=True, text=True):
 
 __all__ = [
     "ProjectSpec",
+    "describe_baseline_dirt",
     "fingerprint_tree",
+    "git_head_sha",
+    "git_repo_state",
     "git_status_snapshot",
     "is_volatile_path",
     "live_tree_state",
     "nested_repo_state",
     "unexpected_git_changes",
+    "unexpected_repo_changes",
 ]
 
 
@@ -139,6 +144,134 @@ def unexpected_git_changes(
         left = f"'{was}'" if was is not None else "'  '"
         right = f"'{now}'" if now is not None else "gone"
         changes.append(f"{path}: {left} -> {right}")
+    return changes
+
+
+# --------------------------------------------------------------------------
+# git: the full repo state (HEAD + status codes + content digests)
+# --------------------------------------------------------------------------
+#
+# `git_status_snapshot` + `unexpected_git_changes` prove "this invocation
+# changed nothing", which is strictly weaker than what the gate claims. Three
+# gaps survive a pure same-invocation code diff:
+#
+#   A. The baseline is captured inside the run, so a repo that was ALREADY
+#      dirty launders that dirt into the allowance. A stray artefact left by
+#      an earlier verifier run is then never reported at all. Whether that
+#      dirt is *acceptable* is a judgement call for the caller (a task's own
+#      in-flight edits are legitimate; a leaked sandbox file is not), so the
+#      harness's job is to make it VISIBLE -- `describe_baseline_dirt` -- and
+#      never to decide silently that it is fine.
+#   B. A two-character porcelain code is not a content hash. Appending to an
+#      already-modified file keeps it at ' M', and to an untracked file at
+#      '??', so the code diff is empty while the bytes moved.
+#   C. `git commit` mid-run returns porcelain to clean, which is indis-
+#      tinguishable from having touched nothing. HEAD is what moves, and only
+#      nested repos were ever checked for it.
+
+
+def git_head_sha(repo: Path) -> str:
+    """The current commit sha, or `'<unborn>'` before the first commit.
+
+    An unborn HEAD must not raise: a repo with no commits is a legitimate
+    state to take a baseline in, and raising here would push the gate toward
+    the fail-open behaviour the rest of this module exists to remove.
+    """
+    out = _run(["git", "rev-parse", "HEAD"], cwd=str(repo), check=False)
+    sha = out.stdout.strip()
+    return sha if out.returncode == 0 and sha else "<unborn>"
+
+
+def _digest_path(repo: Path, rel: str) -> str:
+    """A content digest for one porcelain path, whatever kind of thing it is.
+
+    Porcelain reports an untracked *directory* as a single `dir/` entry, so a
+    digest that only stat'd the named path would miss a file appearing inside
+    it. Directories are digested over their whole recursive contents.
+    """
+    target = repo / rel
+    try:
+        if target.is_symlink():
+            return f"symlink:{target.readlink()}"
+        if target.is_dir():
+            parts = []
+            for child in sorted(target.rglob("*")):
+                if child.is_dir():
+                    parts.append(f"{child.relative_to(target)}/")
+                else:
+                    parts.append(
+                        f"{child.relative_to(target)}:{_digest_path(repo, str(child.relative_to(repo)))}"
+                    )
+            return "dir:" + _sha256(("\n".join(parts)).encode("utf-8"))
+        return _sha256(target.read_bytes())
+    except OSError:
+        # Deleted, or unreadable. Both are states worth reporting rather than
+        # crashing on; a distinct marker keeps them comparable.
+        return "<absent>"
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def git_repo_state(repo: Path) -> dict[str, object]:
+    """HEAD sha + porcelain codes + a content digest per non-clean path.
+
+    This is `git_status_snapshot` promoted to the same strength that
+    `nested_repo_state` already applied to nested repos, plus the content
+    layer neither of them had.
+
+    Raises `subprocess.CalledProcessError` if `repo` is not a git work tree,
+    for the same fail-toward-reject reason as `git_status_snapshot`.
+    """
+    status = git_status_snapshot(repo)
+    return {
+        "head": git_head_sha(repo),
+        "status": status,
+        "digests": {path: _digest_path(repo, path) for path in status},
+    }
+
+
+def describe_baseline_dirt(state: dict[str, object]) -> list[str]:
+    """Every path already non-clean when the baseline was taken.
+
+    The gate's own allowance, made explicit. A same-invocation diff adopts
+    this set silently; surfacing it is what lets a caller assert the stronger
+    property ("the tree was clean to begin with") instead of only the weaker
+    one ("this run changed nothing").
+    """
+    status: dict[str, str] = state["status"]  # type: ignore[assignment]
+    return [f"{path}: '{code}'" for path, code in sorted(status.items())]
+
+
+def unexpected_repo_changes(
+    before: dict[str, object], after: dict[str, object]
+) -> list[str]:
+    """Every way the repo moved between two `git_repo_state` calls.
+
+    Reports a HEAD move, a porcelain code change, and -- the part a code-only
+    diff cannot see -- a content change to a path that was already dirty at
+    baseline and stayed at the same code.
+    """
+    changes: list[str] = []
+    if before["head"] != after["head"]:
+        changes.append(f"HEAD: {before['head']} -> {after['head']}")
+
+    before_status: dict[str, str] = before["status"]  # type: ignore[assignment]
+    after_status: dict[str, str] = after["status"]  # type: ignore[assignment]
+    changes.extend(unexpected_git_changes(before_status, after_status))
+
+    before_digests: dict[str, str] = before["digests"]  # type: ignore[assignment]
+    after_digests: dict[str, str] = after["digests"]  # type: ignore[assignment]
+    for path in sorted(set(before_digests) & set(after_digests)):
+        if before_status.get(path) != after_status.get(path):
+            continue  # already reported as a code transition
+        if before_digests[path] != after_digests[path]:
+            changes.append(
+                f"{path}: content changed while its porcelain code stayed "
+                f"'{after_status.get(path)}' "
+                f"({before_digests[path][:12]} -> {after_digests[path][:12]})"
+            )
     return changes
 
 

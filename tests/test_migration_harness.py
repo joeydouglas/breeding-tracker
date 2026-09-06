@@ -39,12 +39,15 @@ import pytest
 
 from migration_harness import (
     ProjectSpec,
+    describe_baseline_dirt,
     fingerprint_tree,
+    git_repo_state,
     git_status_snapshot,
     is_volatile_path,
     live_tree_state,
     nested_repo_state,
     unexpected_git_changes,
+    unexpected_repo_changes,
 )
 
 
@@ -522,3 +525,129 @@ def test_harness_nested_repo_state_survives_a_patched_subprocess_run(
     for name in ("run", "Popen", "call", "check_call", "check_output"):
         monkeypatch.setattr(subprocess, name, boom)
     assert set(nested_repo_state(live)) == {"dashboard"}
+
+
+# --------------------------------------------------------------------------
+# 5. the git gate's REMAINING blind spot: a same-invocation diff only proves
+#    "this run changed nothing", never "the tree was clean to begin with"
+# --------------------------------------------------------------------------
+#
+# 2c8869c/81c2038 replaced the suffix whitelist with a before/after baseline
+# diff. That closed the whitelist hole but left three of its own, all from the
+# same root cause: the baseline is captured INSIDE the run, so it launders
+# anything that was already true when the run started, and it records only a
+# two-character porcelain code.
+#
+#   A. Pre-existing dirt is silently adopted as the allowance. A stray file a
+#      PREVIOUS verifier run leaked, or an uncommitted migration side effect,
+#      is invisible: the gate reports PASS and never even names it.
+#   B. A baseline-dirty file whose CONTENT changes keeps its ' M' code, so the
+#      code-only diff is empty. The module docstring already claims this case
+#      is caught; only a code TRANSITION (' M' -> 'M ') actually was.
+#   C. A commit made mid-run moves HEAD and can leave status identical (or
+#      clean -> clean). `nested_repo_state` checks HEAD for nested repos; the
+#      top-level gate never did.
+
+
+def test_repo_state_carries_head_status_and_content_digests(repo):
+    state = git_repo_state(repo)
+    assert set(state) == {"head", "status", "digests"}
+    assert len(state["head"]) == 40
+    assert state["status"] == {} and state["digests"] == {}
+
+
+def test_baseline_dirt_is_reported_not_silently_adopted(repo):
+    """Blind spot A. The whole point: a repo dirty BEFORE the run is evidence
+    of an unaccounted side effect, and a gate that adopts it as its own
+    allowance can never say so."""
+    assert describe_baseline_dirt(git_repo_state(repo)) == []
+    (repo / "leftover.txt").write_text("from an earlier run\n", encoding="utf-8")
+    dirt = describe_baseline_dirt(git_repo_state(repo))
+    assert len(dirt) == 1 and "leftover.txt" in dirt[0]
+
+
+def test_a_dirty_file_edited_further_is_caught_by_content_not_just_code(repo):
+    """Blind spot B: ' M' -> ' M' is an empty code diff, but the bytes moved."""
+    (repo / "src" / "keep.py").write_text("in flight\n", encoding="utf-8")
+    before = git_repo_state(repo)
+    (repo / "src" / "keep.py").write_text("in flight, then TAMPERED\n", encoding="utf-8")
+    after = git_repo_state(repo)
+
+    # The old code-only gate is blind here -- pin that, so this test proves the
+    # new layer is what catches it rather than passing for the old reason.
+    assert unexpected_git_changes(before["status"], after["status"]) == []
+
+    changes = unexpected_repo_changes(before, after)
+    assert len(changes) == 1
+    assert "src/keep.py" in changes[0] and "content changed" in changes[0]
+
+
+def test_an_untracked_files_content_changing_is_caught(repo):
+    (repo / "stray.txt").write_text("one\n", encoding="utf-8")
+    before = git_repo_state(repo)
+    (repo / "stray.txt").write_text("two\n", encoding="utf-8")
+    assert unexpected_git_changes(before["status"], git_repo_state(repo)["status"]) == []
+    assert any("stray.txt" in c for c in unexpected_repo_changes(before, git_repo_state(repo)))
+
+
+def test_a_commit_made_mid_run_is_caught_even_though_status_stays_clean(repo):
+    """Blind spot C: commit a dirty file and porcelain returns to {}, so the
+    code-only diff reads exactly like a run that touched nothing."""
+    before = git_repo_state(repo)
+    (repo / "src" / "keep.py").write_text("committed mid-run\n", encoding="utf-8")
+    _git(repo, "commit", "-aqm", "a commit the migration should never make")
+    after = git_repo_state(repo)
+
+    assert after["status"] == before["status"] == {}
+    assert unexpected_git_changes(before["status"], after["status"]) == []
+
+    changes = unexpected_repo_changes(before, after)
+    assert len(changes) == 1 and changes[0].startswith("HEAD:")
+
+
+def test_repo_state_still_catches_everything_the_code_diff_caught(repo):
+    before = git_repo_state(repo)
+    (repo / "src" / "keep.py").write_text("x = 2\n", encoding="utf-8")
+    (repo / "brand-new.txt").write_text("hi\n", encoding="utf-8")
+    changes = unexpected_repo_changes(before, git_repo_state(repo))
+    assert any("src/keep.py" in c for c in changes)
+    assert any("brand-new.txt" in c for c in changes)
+
+
+def test_repo_state_is_quiet_when_genuinely_nothing_happened(repo):
+    before = git_repo_state(repo)
+    assert unexpected_repo_changes(before, git_repo_state(repo)) == []
+
+
+def test_an_untracked_directorys_contents_are_digested_not_just_its_name(repo):
+    """Porcelain reports an untracked DIRECTORY as one `dir/` entry, so a
+    per-path digest that only stat'd the name would miss a file appearing
+    inside it."""
+    (repo / "stray_dir").mkdir()
+    (repo / "stray_dir" / "a.txt").write_text("a\n", encoding="utf-8")
+    before = git_repo_state(repo)
+    (repo / "stray_dir" / "b.txt").write_text("b\n", encoding="utf-8")
+    assert unexpected_repo_changes(before, git_repo_state(repo))
+
+
+def test_a_deleted_baseline_dirty_file_is_reported(repo):
+    (repo / "stray.txt").write_text("one\n", encoding="utf-8")
+    before = git_repo_state(repo)
+    (repo / "stray.txt").unlink()
+    assert unexpected_repo_changes(before, git_repo_state(repo))
+
+
+def test_repo_state_of_a_non_repo_raises(tmp_path):
+    with pytest.raises(Exception):
+        git_repo_state(tmp_path)
+
+
+def test_harness_repo_state_survives_a_patched_subprocess_run(repo, monkeypatch):
+    """Same booby-trap constraint as the rest of the harness."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("trapped")
+
+    for name in ("run", "Popen", "call", "check_call", "check_output"):
+        monkeypatch.setattr(subprocess, name, boom)
+    assert git_repo_state(repo)["status"] == {}

@@ -28,9 +28,10 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from migration_harness import (  # noqa: E402  (needs the sys.path line above)
-    git_status_snapshot,
+    describe_baseline_dirt,
+    git_repo_state,
     live_tree_state,
-    unexpected_git_changes,
+    unexpected_repo_changes,
 )
 from migration_specs import PROJECT_SPECS, SPECS_BY_SLUG  # noqa: E402
 
@@ -66,7 +67,7 @@ def md5sum_via_system(path):
     return out.stdout.split()[0]
 
 
-def verify(spec, check):
+def verify(spec, check, allow_dirty_baseline=False):
     """Every acceptance claim for one project, re-derived from scratch."""
     import plant_markdown
     import project_markdown
@@ -85,9 +86,31 @@ def verify(spec, check):
 
     # Baselines captured BEFORE the migration runs, or the post-run
     # comparisons have nothing to detect a change against.
-    git_baseline = {
-        repo: git_status_snapshot(repo) for repo in (REPO, registry.parent)
-    }
+    #
+    # The baseline is also asserted to be CLEAN, not merely recorded. A
+    # before/after diff alone proves only "this invocation changed nothing";
+    # it adopts whatever was already dirty as its own allowance, so a stray
+    # artefact left by an EARLIER run -- exactly the side effect this gate
+    # exists to catch -- is laundered into the baseline and never reported.
+    # Cleanliness is the property the acceptance claim actually needs, so the
+    # dirt is named here and the run fails on it unless a human explicitly
+    # opts out with --allow-dirty-baseline (which is itself reported, so an
+    # opted-out run can never be mistaken for a clean one).
+    git_baseline = {repo: git_repo_state(repo) for repo in (REPO, registry.parent)}
+    for repo, state in git_baseline.items():
+        dirt = describe_baseline_dirt(state)
+        if dirt and allow_dirty_baseline:
+            print(
+                f"[NOTE] {repo.name} was already dirty before this run and "
+                f"--allow-dirty-baseline was given, so the pre-run cleanliness "
+                f"claim is NOT being made for it: {dirt}"
+            )
+            continue
+        check(
+            f"{repo.name} working tree was already clean BEFORE the run started",
+            not dirt,
+            str(dirt),
+        )
     tracker_md5_before = md5sum_via_system(tracker)
     registry_md5_before = md5sum_via_system(registry)
     live_before = live_tree_state(live)
@@ -481,10 +504,16 @@ def verify(spec, check):
     # Baseline-diff, not a whitelist: whatever was already dirty when this run
     # started is the allowance, so no path is ever forgiven by name and a
     # *change* to an already-dirty file is still caught.
+    #
+    # The comparison is over the full repo state -- HEAD sha, porcelain codes
+    # AND a content digest per non-clean path -- not the porcelain codes
+    # alone. A code-only diff is blind to two real side effects: appending to
+    # a file that was already ' M' (or '??') leaves its code untouched, and a
+    # mid-run `git commit` returns porcelain to clean, which reads exactly
+    # like a run that touched nothing. Both move HEAD or the bytes, so both
+    # are now reported.
     for repo in (REPO, registry.parent):
-        unexpected = unexpected_git_changes(
-            git_baseline[repo], git_status_snapshot(repo)
-        )
+        unexpected = unexpected_repo_changes(git_baseline[repo], git_repo_state(repo))
         check(
             f"no unexpected git changes in {repo.name}", not unexpected, str(unexpected)
         )
@@ -494,6 +523,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("slug", nargs="?", help="project slug to verify")
     parser.add_argument("--all", action="store_true", help="verify every project")
+    parser.add_argument(
+        "--allow-dirty-baseline",
+        action="store_true",
+        help=(
+            "do not fail when a repo is already dirty before the run; the dirt "
+            "is printed as a NOTE and the pre-run cleanliness claim is dropped "
+            "for that repo. For use mid-task when the working tree legitimately "
+            "carries in-flight edits -- never for a final acceptance run."
+        ),
+    )
     args = parser.parse_args()
 
     if args.all:
@@ -512,7 +551,7 @@ def main():
         if not spec.tracker.exists():
             print(f"[SKIP] {spec.slug}: tracker not present at {spec.tracker}")
             continue
-        verify(spec, check)
+        verify(spec, check, allow_dirty_baseline=args.allow_dirty_baseline)
 
     print()
     if not check.total:
