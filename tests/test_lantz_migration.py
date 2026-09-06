@@ -56,6 +56,7 @@ from helpers_migration import (  # noqa: F401  (fixture re-export)
 )
 from migration_specs import LANTZ as SPEC
 from migration_specs import PROJECT_SPECS
+from plant_markdown import BODY_FIELD as PLANT_BODY_FIELD
 
 requires_real_data = pytest.mark.skipif(
     not SPEC.tracker.exists(),
@@ -93,11 +94,15 @@ def migrated(tmp_path, no_side_effects):
 
 
 def _plant(out, plant_id):
-    from plant_markdown import load_schema, read_plant
+    from plant_markdown import read_plant
 
-    return read_plant(
-        out / "plants" / f"{plant_id}.md", schema=load_schema(PLANT_TEMPLATE)
-    )
+    return read_plant(out / "plants" / f"{plant_id}.md", schema=_plant_schema())
+
+
+def _plant_schema():
+    from plant_markdown import load_schema
+
+    return load_schema(PLANT_TEMPLATE)
 
 
 def _project(out):
@@ -237,10 +242,23 @@ def test_this_projects_notes_meta_is_resolved_only(migrated):
     kibungan is flagged-only; spaced-paste has both; the rest have neither.
     An empty list and a missing key are both falsy, so the empty
     `flagged_ambiguities` is asserted to survive as an actual empty list.
+
+    The combination claim is checked against every other spec's real tracker
+    for the same reason as the claims above: a prose-only "only project"
+    rots silently, an asserted one fails.
     """
     _, out = migrated
     got = _project(out)["notes_meta"]
     source = tracker_json(SPEC)["notes_meta"]
+
+    for spec in PROJECT_SPECS:
+        if spec.slug == SPEC.slug or not spec.tracker.exists():
+            continue
+        meta = tracker_json(spec).get("notes_meta") or {}
+        resolved_only = bool(meta.get("resolved_ambiguities")) and not meta.get(
+            "flagged_ambiguities"
+        )
+        assert not resolved_only, f"{spec.slug} is also resolved-only"
 
     assert got["flagged_ambiguities"] == [] == source["flagged_ambiguities"]
     assert len(got["resolved_ambiguities"]) == 1
@@ -260,9 +278,29 @@ def test_ltz01_is_the_only_record_in_the_corpus_with_no_defaulted_fields(migrate
     `defaulted_fields` map that always emitted an entry per record — or a
     `_apply_defaults` that reported a field it did not actually materialise —
     is caught only by this record.
+
+    The "only in the corpus" half is asserted against every other spec's real
+    tracker, not left as a docstring claim: a record needs no default exactly
+    when its source keys already cover every non-body field of the plant
+    schema, so the same predicate is evaluated over all six rosters.
     """
     summary, _ = migrated
     assert CORRECTION_CARRIER not in summary.defaulted_fields
+
+    schema = _plant_schema()
+    required = {f for f in schema if f != PLANT_BODY_FIELD}
+    for spec in PROJECT_SPECS:
+        if spec.slug == SPEC.slug or not spec.tracker.exists():
+            continue
+        zero_default = [
+            p["id"] for p in tracker_json(spec)["plants"] if required <= set(p)
+        ]
+        assert zero_default == [], (
+            f"{spec.slug} also has zero-default records: {zero_default}"
+        )
+    assert [
+        p["id"] for p in tracker_json(SPEC)["plants"] if required <= set(p)
+    ] == [CORRECTION_CARRIER]
 
     source = {p["id"]: p for p in tracker_json(SPEC)["plants"]}
     assert set(source[CORRECTION_CARRIER]) == set(SPEC.plant_keys) | {
@@ -385,10 +423,22 @@ def test_every_plant_shares_one_status_and_it_survives(migrated):
     entirely, or normalised it to a constant, still produces a
     self-consistent-looking roster here — every other project's data would
     show the collapse as a lost distinction.
+
+    The "only project" half is asserted against every other spec's real
+    tracker rather than stated in prose, so a future project losing its
+    status variety fails this claim loudly instead of rotting it.
     """
     _, out = migrated
     source = {p["id"]: p["status"] for p in tracker_json(SPEC)["plants"]}
     assert set(source.values()) == {"culled"}
+
+    for spec in PROJECT_SPECS:
+        if spec.slug == SPEC.slug or not spec.tracker.exists():
+            continue
+        statuses = {p["status"] for p in tracker_json(spec)["plants"]}
+        assert len(statuses) > 1, (
+            f"{spec.slug} also has a single-status roster: {sorted(statuses)}"
+        )
 
     got = {i: _plant(out, i)["status"] for i in EXPECTED_IDS}
     assert got == source

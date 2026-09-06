@@ -39,8 +39,10 @@ def sibling_prefixes(spec):
     Production routes one Discord message against the whole registry, so a
     migrated pattern is only safe if it does not collide with any sibling.
     Read from `registry.json` rather than from `PROJECT_SPECS` deliberately:
-    the projects not yet migrated (spaced-paste, lantz) are live in production
-    today and a collision with one of them is just as real.
+    `PROJECT_SPECS` covers the whole registry as of Phase 3, but the registry
+    is the live routing source of truth and can gain a project before a
+    `ProjectSpec` exists for it. Reading the file keeps a collision with such
+    a project just as real as one with a spec'd sibling.
     """
     projects = json.loads(spec.registry.read_text(encoding="utf-8"))["projects"]
     return [

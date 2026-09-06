@@ -235,3 +235,53 @@ rather than a partial one.
 **Nothing has been written to any real repo.** Phase 3 produced sandbox proofs
 only; the real migration write, and any git/Drive/Discord step, remains a
 separate deliberate action for a later phase.
+
+## 8. Post-close-out review fixes
+
+Two code-quality issues found on review of this task's close-out, fixed here:
+
+* **Stale "not yet migrated" docstring.** `tests/helpers_migration.py`'s
+  `sibling_prefixes` docstring named spaced-paste and lantz as "not yet
+  migrated" — true when the comment was written, false as of this task's own
+  §7 above (`PROJECT_SPECS` now covers the whole registry). Reworded to state
+  the actual invariant (the registry can outpace `PROJECT_SPECS`) instead of a
+  snapshot of Phase 3's progress that a later task would have had to remember
+  to update again.
+* **Two uniqueness claims not asserted corpus-wide.** `test_lantz_migration.py`
+  claimed "Ltz01 is the only record in the corpus with no defaulted fields",
+  "the only project without status variety", and "the only project with
+  resolved-only notes_meta" in docstring prose only — checked by eye against
+  the other five trackers rather than by the suite. All three now assert the
+  same predicate against every other spec's real tracker, matching the pattern
+  already used elsewhere in this file (`test_lantz_is_the_only_project_...`,
+  `test_this_project_is_the_only_mixed_case_...`): a future project acquiring
+  the property now fails the claim loudly instead of quietly rotting it into a
+  false comment. 708 tests still pass (assertions added to existing tests, no
+  new test count).
+
+## 9. Mutation harness committed: `tools/mutation_test.py`
+
+Every Task 3.x report's mutation-testing section (§4 above included) was
+produced by a throwaway `/tmp` script, deleted after the run — the strongest
+evidence in each report was also the one artifact nobody could re-run or
+audit. `tools/mutation_test.py` replaces those scripts with one committed,
+reusable harness:
+
+* Ten named mutants (`A`-`J`), covering every mutant from Tasks 3.4-3.6's
+  reports (routing-pattern breakage, ID case-folding, `''`/`None` coercion,
+  null-key dropping, status re-derived from emoji, `corrected_reading`
+  defaulting/copying, registry-field fallback) plus a `defaulted_fields`
+  always-populated mutant.
+* Dual-mode: `MUTANT=<name> pytest -p mutation_test` monkeypatches the
+  migration in-process for interactive use; `python tools/mutation_test.py`
+  re-runs the whole suite once per mutant in a clean subprocess and prints a
+  kill table, including which shared-contract **project parametrizations**
+  died — the actual evidence behind every "only project X can catch this"
+  claim in this and earlier reports.
+* Re-run at this commit: **all 10 mutants killed**, reproducing §4's table
+  exactly (mutant A kills `[lantz]` only; C/D split the case-folding projects
+  with `lantz` as the sole intersection; F is killed by every project except
+  `lantz`).
+* No side effects: mutants patch functions in memory only; the sandboxed
+  `no_side_effects` fixture still traps subprocess/socket/urllib/`os.system`
+  for every mutated run.
