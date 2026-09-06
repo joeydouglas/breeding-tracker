@@ -1097,3 +1097,63 @@ round-trip with zero field loss, and `PROJECT_SPECS` now covers the whole
 registry, so `tools/verify_migration.py --all` is a complete corpus gate rather
 than a partial one. Nothing has been written to any real repo; the real
 migration write remains a separate deliberate action for a later phase.
+
+## Task 3.6 review — the two remaining Important issues, and a committed harness
+
+**A docstring that went stale on the commit that made it stale.**
+`helpers_migration.sibling_prefixes` justified reading `registry.json` rather
+than `PROJECT_SPECS` by naming "the projects not yet migrated (spaced-paste,
+lantz)" — true when written at Task 3.3, false the moment Task 3.6 appended
+`LANTZ` to `PROJECT_SPECS`, in the same commit that left the sentence in place.
+The reason itself is still sound, so the fix restates the durable invariant
+(the registry is the live routing source of truth and can gain a project before
+a `ProjectSpec` exists for it) instead of a snapshot of which projects happen to
+be done. A justification written as a list of current facts has an expiry date;
+one written as an invariant does not.
+
+**Three uniqueness claims that were checked by eye, not by the suite.** Task
+3.6 already asserted two of its five "only project" claims corpus-wide — sole
+`corrected_reading` carrier and sole mixed-case prefix each loop over the other
+specs' real trackers. The other three (sole zero-defaulted-field record, sole
+single-status roster, sole resolved-only `notes_meta`) were verified against the
+other five trackers during the task and then written down in prose, which is
+exactly the shape that rotted in Tasks 3.3–3.5 and needed narrowing commits.
+Each now evaluates its own predicate over every other spec: a record needs no
+default exactly when its source keys cover every non-body schema field, a
+roster is single-status when its status set has one member, and `notes_meta` is
+resolved-only when `resolved_ambiguities` is non-empty while
+`flagged_ambiguities` is not. A future project acquiring any of those
+properties now fails a test instead of quietly making a comment untrue.
+
+**The mutation harness is committed** as `tools/mutation_test.py`. Every Task
+3.x report claims its new checks "can actually fail", and every one of those
+claims came from a throwaway script in `/tmp` that was deleted afterwards —
+making the strongest evidence in the phase the one artifact nobody could
+re-run, and the mutant tables unfalsifiable. The harness is a pytest plugin and
+a subprocess runner in one file so each mutant is defined exactly once: the
+plugin patches the migration in memory for a whole session (so a mutant is live
+for the parametrized shared contract, not just one module), and the runner
+re-runs the suite once per mutant and prints which tests died *and which project
+parametrizations* died. That second column is the point: "mutant A dies on
+`[lantz]` only" is the uniqueness claim demonstrated, where a docstring is only
+the claim asserted. With `MUTANT` unset the plugin is a no-op, so the green
+baseline is unchanged.
+
+**Two mutants were narrowed while writing it, which changed the count.** The
+Task 3.6 report's C and D upper/lower-cased the plant ID everywhere, corrupting
+the in-file `id` as well as the filename. That is the blunt fault, and it dies
+so widely that it says little about which project's *data* can see a case bug.
+Narrowing C and D to rewrite the FILENAME only — every field still round-trips,
+the frontmatter `id` is correct, and only a check that compares the real
+directory listing can see it — preserved the result the mixed-case claim rests
+on (C kills `{lantz, spaced-paste}`, D kills the four uppercase projects plus
+`lantz`, intersection `{lantz}`) while making the mutant genuinely subtle. The
+blunt variant was kept as K rather than deleted, because a suite where C and K
+kill the same set has a check looking at only one of the two places an ID
+lives. Eleven mutants total (A–K), all killed at this commit; a survivor would
+be a hole in the suite, and the runner exits non-zero on one.
+
+No production behaviour changed: the fixes are a docstring, three test bodies
+that add assertions, one new tool, and two documents. 708 tests pass under
+`pytest -W error` with zero warnings, `tools/verify_migration.py --all` reports
+277/277 on a clean tree, and nothing was written to any real project repo.
