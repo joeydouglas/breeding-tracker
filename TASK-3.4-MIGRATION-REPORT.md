@@ -195,10 +195,10 @@ after, measured with the system `md5sum` binary.
 | §4a: shared contract, cross-project collision check × 4 projects | +4 |
 | **after** | **589 passed, 0 failed** (zero warnings, `filterwarnings = error`) |
 
-`tools/verify_migration.py --all`: **167/167 checks PASSED** on a clean tree
-(159 before §4a; the 8 new are the collision, separator and flag-parity checks
-across the four projects). Per project: mule-fuel 40, honey-badger 42,
-kibungan 43, paloma-coma 42.
+`tools/verify_migration.py --all`: **171/171 checks PASSED** on a clean tree
+(163 before §4a; the 8 new are the collision, separator and flag-parity checks
+across the four projects). Per project: mule-fuel 41, honey-badger 43,
+kibungan 44, paloma-coma 43.
 
 ## 7. What was NOT done (deliberately)
 
