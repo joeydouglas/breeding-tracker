@@ -38,6 +38,7 @@ from pathlib import Path
 import pytest
 
 from migration_harness import (
+    ProjectSpec,
     fingerprint_tree,
     git_status_snapshot,
     is_volatile_path,
@@ -416,3 +417,108 @@ def test_live_tree_state_still_catches_a_data_write(tree):
     before = live_tree_state(tree)
     (tree / "tracker.json").write_text("{}", encoding="utf-8")
     assert live_tree_state(tree) != before
+
+
+# --------------------------------------------------------------------------
+# 3. ProjectSpec: the per-project delta, as data
+# --------------------------------------------------------------------------
+
+
+def _spec(**kw):
+    base = dict(
+        slug="demo-project",
+        plant_count=3,
+        project_keys=frozenset({"created", "cross_name"}),
+        plant_keys=frozenset({"id", "cross"}),
+    )
+    base.update(kw)
+    return ProjectSpec(**base)
+
+
+def test_spec_derives_the_live_paths_from_the_slug():
+    spec = _spec()
+    assert spec.live_dir == Path.home() / ".hermes" / "breeding" / "demo-project"
+    assert spec.tracker == spec.live_dir / "tracker.json"
+    assert spec.registry.name == "registry.json"
+    assert spec.registry.parent.name == "breeding-meta"
+
+
+def test_expected_records_is_one_project_plus_the_plants():
+    assert _spec(plant_count=23).expected_records == 24
+    assert _spec(plant_count=45).expected_records == 46
+
+
+def test_expected_fields_is_rederived_from_the_source_not_hardcoded():
+    """The +2 are auto_create/plant_id_prefixes, which exist in no tracker."""
+    source = {
+        "created": "x",
+        "cross_name": "y",
+        "plants": [{"id": "A", "cross": "c"}, {"id": "B", "cross": "c", "extra": 1}],
+    }
+    assert _spec().expected_fields(source) == (2 + 3) + 2 + 2
+
+
+def test_expected_fields_matches_the_honey_badger_number_from_task_3_2():
+    """23 plants x 18 keys + 11 project keys + 2 routing fields = 427."""
+    source = {
+        **{f"k{i}": i for i in range(11)},
+        "plants": [{f"f{j}": j for j in range(18)} for _ in range(23)],
+    }
+    assert _spec(plant_count=23).expected_fields(source) == 427
+
+
+def test_spec_is_frozen_so_a_test_cannot_mutate_another_projects_contract():
+    spec = _spec()
+    with pytest.raises(Exception):
+        spec.slug = "something-else"
+
+
+def test_default_expected_plant_defaults_is_corrected_reading():
+    assert _spec().expected_plant_defaults == frozenset({"corrected_reading"})
+    assert _spec().expected_project_defaults == frozenset()
+    assert _spec().incomplete_plants == frozenset()
+
+
+# --------------------------------------------------------------------------
+# 4. the harness must survive the acceptance suite's own booby-traps
+# --------------------------------------------------------------------------
+
+
+def test_harness_git_calls_survive_a_patched_subprocess_run(repo, monkeypatch):
+    """The acceptance suite booby-traps `subprocess.run` so the migration
+    cannot reach a git remote. The harness's OWN git calls are verification
+    scaffolding, not code under test, and must keep working through that trap
+    — otherwise the strongest live-dir check cannot be armed at the same time
+    as the strongest side-effect check.
+
+    Safe because `tracker_migration` is statically proven to import no
+    subprocess at all, so the trap loses no coverage of the code under test.
+    """
+
+    def boom(*args, **kwargs):
+        raise AssertionError("trapped")
+
+    for name in ("run", "Popen", "call", "check_call", "check_output"):
+        monkeypatch.setattr(subprocess, name, boom)
+    assert git_status_snapshot(repo) == {}
+
+
+def test_harness_nested_repo_state_survives_a_patched_subprocess_run(
+    tmp_path, monkeypatch
+):
+    live = tmp_path / "live"
+    dash = live / "dashboard"
+    dash.mkdir(parents=True)
+    (dash / "index.html").write_text("<p>hi</p>", encoding="utf-8")
+    _git(live, "init", "-q", str(dash))
+    _git(dash, "config", "user.email", "t@example.invalid")
+    _git(dash, "config", "user.name", "t")
+    _git(dash, "add", "-A")
+    _git(dash, "commit", "-qm", "initial")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("trapped")
+
+    for name in ("run", "Popen", "call", "check_call", "check_output"):
+        monkeypatch.setattr(subprocess, name, boom)
+    assert set(nested_repo_state(live)) == {"dashboard"}

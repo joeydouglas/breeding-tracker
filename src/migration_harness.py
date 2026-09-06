@@ -40,6 +40,37 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+#: Bound at import time, deliberately.
+#:
+#: The acceptance suite booby-traps `subprocess.run`, `Popen`, `call`,
+#: `check_call` and `check_output` for the duration of a migration so the code
+#: under test physically cannot reach a git remote, Drive or Discord. This
+#: module's git calls are *verification scaffolding*, not code under test, and
+#: must keep working through that trap — otherwise the strongest live-dir
+#: check (nested repo HEAD/status) could not be armed at the same time as the
+#: strongest side-effect check.
+#:
+#: `subprocess.run` is not enough on its own: it resolves `Popen` from the
+#: module globals at call time, so a trapped `Popen` still fires through a
+#: saved `run`. The real `Popen` is captured and driven directly.
+#:
+#: This costs no coverage: `tracker_migration` is statically proven to import
+#: no subprocess, socket, urllib or http at all, so the trap is what guards
+#: the migration and this alias only guards the observer.
+_Popen = subprocess.Popen
+_CalledProcessError = subprocess.CalledProcessError
+_PIPE = subprocess.PIPE
+
+
+def _run(argv, *, cwd, check=True, text=True):
+    """`subprocess.run(capture_output=True)` built on the import-time `Popen`."""
+    with _Popen(argv, cwd=cwd, stdout=_PIPE, stderr=_PIPE, text=text) as proc:
+        stdout, stderr = proc.communicate()
+        code = proc.returncode
+    if check and code:
+        raise _CalledProcessError(code, argv, output=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(argv, code, stdout, stderr)
+
 __all__ = [
     "ProjectSpec",
     "fingerprint_tree",
@@ -70,11 +101,9 @@ def git_status_snapshot(repo: Path) -> dict[str, str]:
     same fail-toward-accept mode `VerificationReport.verified_something`
     exists to prevent.
     """
-    out = subprocess.run(
+    out = _run(
         ["git", "status", "--porcelain", "-z", "--untracked-files=all"],
         cwd=str(repo),
-        capture_output=True,
-        text=True,
         check=True,
     ).stdout
 
@@ -197,11 +226,9 @@ def nested_repo_state(root: Path) -> dict[str, tuple[str, dict[str, str]]]:
     state: dict[str, tuple[str, dict[str, str]]] = {}
     for git_dir in sorted(root.rglob(".git")):
         work_tree = git_dir.parent
-        head = subprocess.run(
+        head = _run(
             ["git", "rev-parse", "HEAD"],
             cwd=str(work_tree),
-            capture_output=True,
-            text=True,
             check=True,
         ).stdout.strip()
         state[str(work_tree.relative_to(root))] = (
