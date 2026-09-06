@@ -158,8 +158,8 @@ Inherited whole from the shared contract, with nothing weakened:
 |---|---|
 | `pytest` (whole suite) | **527 passed**, 0 warnings (`filterwarnings = error`) — was 488 |
 | new tests | +39 (27 shared contract cases now parametrized over this project, +12 project-specific) |
-| `tools/verify_migration.py kibungan-pheno-hunt` | **39/39 checks passed** |
-| `tools/verify_migration.py --all` | **113/113 checks passed** across all three projects |
+| `tools/verify_migration.py kibungan-pheno-hunt` | **40/40 checks passed** |
+| `tools/verify_migration.py --all` | **116/116 checks passed** across all three projects |
 
 The final acceptance run was made on a clean tree, without
 `--allow-dirty-baseline`, so the pre-run cleanliness claim is made in full.

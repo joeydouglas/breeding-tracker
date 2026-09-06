@@ -830,7 +830,7 @@ during a data move is data loss, the same reasoning that kept honey-badger's
 factually stale `migration_note` intact.
 
 Final state: 527 tests (was 488), 100% green, zero warnings (`pytest -W error`);
-113/113 out-of-band checks across all three projects on a clean tree (was 76 —
-the +37 are kibungan's own, including the new dropped-entry tamper);
+116/116 out-of-band checks across all three projects on a clean tree (was 76 —
+the +40 are kibungan's own, including the new dropped-entry tamper);
 `tracker.json` md5 `c1bb1e3bc31ec2f3ae0c0601e5a59647` unchanged, registry and
 the nested dashboard repo untouched.
