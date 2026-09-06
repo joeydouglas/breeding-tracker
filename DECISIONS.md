@@ -725,3 +725,59 @@ Final state: 477 tests (was 402), 100% green, zero warnings (`pytest -W
 error`); 72/72 out-of-band checks across both projects; `tracker.json` md5s
 `f55be8df99b8e94606c19b3730b830e4` and `eb23369faf136231e3a801eb5f99612a`
 unchanged, registry and the nested dashboard repo untouched.
+
+## Task 3.2 review round 5: the git gate's *pre-existing dirt* blind spot
+
+Round 4 replaced the suffix whitelist with a before/after baseline diff
+(2c8869c/81c2038) and the round-4 write-up claimed the gate now catches "a
+baseline-dirty path whose state merely *changes*". Review found that claim
+was only half true, and that the underlying property was still not proven.
+
+A before/after diff establishes **"this invocation changed nothing"**. The
+acceptance claim the verifier actually makes is the stronger **"the migration
+produced no side effects"**, and the two differ whenever the tree was already
+dirty when the run began. Because the baseline is captured *inside* the run,
+the gate adopts pre-existing dirt as its own allowance and never mentions it:
+a stray artefact leaked by an EARLIER verifier run — precisely the side effect
+this gate exists to catch — is laundered into the baseline. Reproduced against
+the real repos: with `DECISIONS.md` modified and two untracked files planted
+before launch, the verifier reported `ALL 35 CHECKS PASSED`.
+
+Two further gaps shared the same root cause — the gate compared *two-character
+porcelain codes* from a single invocation:
+
+* **A porcelain code is not a content hash.** Appending to a file already at
+  `' M'` (or an untracked file at `'??'`) leaves its code untouched, so the
+  code diff is empty while the bytes moved. This is the case round 4 believed
+  it had covered; only a code *transition* (`' M'` -> `'M '`) was ever caught.
+* **A mid-run `git commit` returns porcelain to clean**, which is byte-for-byte
+  indistinguishable from a run that touched nothing. HEAD is what moves, and
+  `nested_repo_state` already checked HEAD for *nested* repos while the
+  top-level gate did not.
+
+`git_repo_state` now records HEAD sha + porcelain codes + a **sha256 digest per
+non-clean path**, and `unexpected_repo_changes` diffs all three.
+`describe_baseline_dirt` makes the allowance explicit, and the verifier asserts
+pre-run cleanliness as a first-class check rather than assuming it. Untracked
+*directories* are digested recursively, because porcelain collapses them to a
+single `dir/` entry and a per-name digest would miss a file appearing inside.
+
+Whether pre-existing dirt is acceptable is a caller's judgement — a task's own
+in-flight edits are legitimate, a leaked sandbox file is not — so the harness
+makes it visible and never decides silently. `--allow-dirty-baseline` drops
+the cleanliness claim for a mid-task run and prints the dirt as a NOTE, so an
+opted-out run cannot be mistaken for a clean one.
+
+Each gap is pinned by a test that asserts the OLD code-only diff returns `[]`
+for that input, so the new layer is provably what catches it rather than the
+test passing for the pre-existing reason. Mutation-tested against the REAL
+repos, not just fixtures: a mid-run append to a baseline-dirty file was caught
+(`content changed while its porcelain code stayed ' M'`), and a mid-run commit
+was caught (`HEAD: 647c7e1... -> 5275d0b...`) while porcelain read clean
+throughout. Both mutations reverted, both repos restored to their committed
+state.
+
+Final state: 488 tests (was 477), 100% green, zero warnings (`pytest -W error`);
+76/76 out-of-band checks across both projects on a clean tree (was 72 — the +4
+are the new pre-run cleanliness claims, 2 repos x 2 projects); the reviewer's
+dirty-baseline repro now FAILS with exit 1 and names every offending path.
