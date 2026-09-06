@@ -635,3 +635,93 @@ empty", while 23 plants exist. The note is stale in the **source**. It is
 migrated verbatim: correcting or dropping prose during a migration is data
 loss, and it would hide the drift from the human who needs to see it. Flagged
 in the report, not fixed here. Migration preserves; it does not editorialise.
+
+### Task 3.2 code-quality review — three Important findings
+
+Fixed before Task 3.3 could replicate them. All three were in the
+*verification tooling*, not the migration: `src/tracker_migration.py` is
+byte-identical across this work. A gate that fails toward "accept", or that
+cries wolf, is worse than no gate, because it is trusted.
+
+**1. The git side-effect gate was a suffix whitelist.** Both verifiers decided
+"no unexpected git changes" by discarding every `git status --porcelain` line
+whose text ended with one of a hardcoded list of paths. Four defects in one
+construct: the list grew by an entry per project; a whitelisted path was
+forgiven *whatever* had happened to it (edited, staged, truncated to zero,
+deleted); a file already dirty for unrelated reasons was silently excused; and
+mule-fuel's copy carried a blanket `"tools/" not in line` escape forgiving
+every change anywhere under `tools/` — including the verifier rewriting
+itself. Replaced by `git_status_snapshot` + `unexpected_git_changes`: a
+porcelain baseline is captured before the run and *any* divergence is
+reported, so the allowance is data rather than a literal list of forgiven
+paths. It parses `--porcelain -z`, because plain porcelain C-quotes paths
+containing spaces or quotes — the exact bug `ec18b34` already fixed once in
+`migration.py`, which the gate policing `migration.py` must not reintroduce.
+
+**2. The live-directory fingerprint was flaky.** `(size, mtime_ns)` over
+`LIVE_DIR.rglob("*")` swept in `__pycache__/`, `cache/`, `.pytest_cache/` and
+the nested `dashboard/.git/` working repo. Those are rewritten by processes
+with nothing to do with the migration — importing a module writes a `.pyc`,
+the dashboard generator refreshes `cache/*.json`, a `git fetch` rewrites
+`FETCH_HEAD` — so the check could go red on an entirely clean run.
+`is_volatile_path` excludes exactly those (a closed list, not a heuristic),
+taking honey-badger from 400 fingerprinted paths to 62 data paths. Critically,
+the exclusion does not *lose* coverage: `nested_repo_state` replaces the
+`.git` mtimes with a **stronger** check — HEAD sha + porcelain status — which
+a `git commit`/`git push` by the migration moves and a `git gc` does not.
+Directories are recorded by presence, never mtime, because a directory's mtime
+bumps when a child is created and would let excluded churn leak back through
+its parent.
+
+Every exclusion is paired with a negative control, and the controls were run
+against the REAL data, not just fixtures: an untracked file created mid-run
+flips the git check to FAIL, and a byte appended to the live
+`dashboard/index.html` flips the fingerprint to FAIL (restored byte- and
+mtime-identical afterwards). A green check never observed going red is not
+evidence — the lesson Task 3.2 recorded and this round applied to itself.
+
+**3. Per-project test and verifier duplication.** Task 3.1 and 3.2 each
+carried a full copy of the same acceptance module and verifier, and the copies
+had **already drifted**: 3.2 gained a never-migrated-dir gate and an
+evidence-count assertion that 3.1 never received, while 3.1's verifier kept
+the `tools/` escape that 3.2's dropped. Four projects remained, so the drift
+was about to be replicated rather than repaired.
+
+The shared contract now lives in `tests/test_project_migration_contract.py`,
+parametrized over `migration_specs.PROJECT_SPECS`; both projects run the full
+current contract including the checks each was missing. `ProjectSpec` carries
+the genuine per-project delta as data. `tools/verify_migration.py` takes a
+slug or `--all` (898 duplicated lines to 532). Task 3.3 adds one `ProjectSpec`
+instead of copying ~1200 lines that are already a version behind.
+
+Two things generalising surfaced, both fixed test-first:
+
+* The plant-key inventory in the first draft of the specs was *guessed* rather
+  than sourced from the trackers, and the contract suite caught it
+  immediately. The real 18 keys were re-derived from the live data.
+* The harness's own git calls tripped the acceptance suite's `subprocess`
+  booby-trap, so the strongest live-dir check could not be armed alongside the
+  strongest side-effect check. `migration_harness` now binds the real `Popen`
+  at import time — saving `subprocess.run` alone is insufficient, since it
+  resolves `Popen` from module globals at call time. This costs no coverage:
+  `tracker_migration` is statically proven to import no `subprocess`,
+  `socket`, `urllib` or `http` at all, so the trap guards the code under test
+  while the alias only guards the observer.
+
+mule-fuel also gained an *executable* record of why its own routing-field
+check is not discriminating (its registry `auto_create` equals the template
+default), which fails if the registry ever changes — turning a comment that
+can rot into an assertion that cannot. The unified verifier applies the same
+reasoning at runtime: where the two agree it prints a NOTE rather than a PASS,
+because a check that cannot fail is not evidence.
+
+Mutation-tested throughout — registry override removed, a plant dropped, a
+project field truncated, routing regexes stripped of backslashes, the
+whitelist reinstated, directories fingerprinted by mtime, an over-broad
+volatile classifier, `.git` mtimes, porcelain without `-z` — every one caught,
+and the per-project mutations caught on BOTH projects.
+
+Final state: 477 tests (was 402), 100% green, zero warnings (`pytest -W
+error`); 72/72 out-of-band checks across both projects; `tracker.json` md5s
+`f55be8df99b8e94606c19b3730b830e4` and `eb23369faf136231e3a801eb5f99612a`
+unchanged, registry and the nested dashboard repo untouched.
