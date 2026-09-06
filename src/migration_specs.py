@@ -239,7 +239,79 @@ SPACED_PASTE = ProjectSpec(
     ),
 )
 
+LANTZ = ProjectSpec(
+    slug="lantz",
+    plant_count=4,
+    project_keys=frozenset(
+        {
+            "created",
+            "cross_name",
+            "drive_folders",
+            "github_pages_url",
+            "github_repo",
+            "google_sheet_id",
+            "google_sheet_url",
+            "last_updated",
+            "notes_meta",
+            "plants",
+        }
+    ),
+    plant_keys=_COMMON_PLANT_KEYS,
+    expected_project_defaults=frozenset({"genetics", "breeder_lineage"}),
+    notes=(
+        "The ONLY project in the six-tracker corpus that carries "
+        "`corrected_reading` at all: Ltz01 holds the single real value "
+        "(\"'Thanos' -> 'phenos'\"), and every other spec declares that field a "
+        "materialised template default because no other tracker has the key on "
+        "any record. Two consequences no earlier project could exercise. "
+        "First, `corrected_reading` must survive as REAL DATA on Ltz01 while "
+        "still being defaulted to null on Ltz03/Ltz06/Ltz07, so a writer that "
+        "unconditionally materialised the template default -- which is exactly "
+        "what the other five projects' data cannot distinguish from correct "
+        "behaviour, since null is the right answer everywhere there -- "
+        "silently destroys the corpus's only human-confirmed transcription "
+        "correction and stays green on all five. Second, Ltz01 is the first "
+        "and only record in any project with ZERO defaulted fields (it carries "
+        "all 19 keys), so it is the only case where `defaulted_fields` has no "
+        "entry for a plant at all; mule-fuel's MG07 is the opposite skew (3 "
+        "defaults where its siblings have 1). "
+        "It is also the only MIXED-CASE plant-ID family: the prefix is 'Ltz' "
+        "(upper-initial, lower tail) where MG/HBH/PK/PL/PC are all-upper and "
+        "spaced-paste's 'sp' is all-lower, so an ID normalised to either "
+        "`.upper()` or `.lower()` during migration is caught here and by "
+        "neither of the two case-homogeneous shapes -- spaced-paste's lowercase "
+        "roster survives `.lower()` untouched and the four uppercase rosters "
+        "survive `.upper()`. "
+        "The SMALLEST project at 4 plants, and the only one whose plants all "
+        "share a single status (`culled` on all four), so a migration that "
+        "dropped or normalised `status` entirely still produces a "
+        "self-consistent-looking roster here. "
+        "Its notes_meta is the only one with a non-empty "
+        "`resolved_ambiguities` and an EMPTY `flagged_ambiguities` (kibungan "
+        "is flagged-only; spaced-paste has both), and that resolved entry is "
+        "the provenance for Ltz01's corrected_reading, so the two must survive "
+        "together. "
+        "NOT unique, and deliberately not claimed as such: `photos_drive_url` "
+        "is the empty string on every plant (spaced-paste is the same, and "
+        "caught a ''->None coercion first), and Ltz07's tab emoji contradicts "
+        "its status (paloma-coma's PC04 has the same contradiction). "
+        "Registry auto_create is false, which EQUALS the template default, so "
+        "like mule-fuel and spaced-paste this project's routing-field "
+        "assertions are true but not discriminating for Task 3.0 SS8. IDs are "
+        "non-contiguous: Ltz01, Ltz03, Ltz06, Ltz07 (no Ltz02/04/05). Nine of "
+        "the ten nullable plant fields are null on every plant; "
+        "selection_notes is populated on Ltz01 alone."
+    ),
+)
+
 #: Every project whose migration has been accepted. Task 3.6 appends here.
-PROJECT_SPECS = [MULE_FUEL, HONEY_BADGER_HAZE, KIBUNGAN, PALOMA_COMA, SPACED_PASTE]
+PROJECT_SPECS = [
+    MULE_FUEL,
+    HONEY_BADGER_HAZE,
+    KIBUNGAN,
+    PALOMA_COMA,
+    SPACED_PASTE,
+    LANTZ,
+]
 
 SPECS_BY_SLUG = {spec.slug: spec for spec in PROJECT_SPECS}
