@@ -134,6 +134,37 @@ markdown still compares **equal** to the registry (equality check green) while
 the pattern routes **zero** of the five real IDs — caught only by the lifted
 behavioural check.
 
+### 4a. Three gaps in the lifted check, closed after review
+
+Reviewing the lifted check against production (`breeding_core._compile_prefixes`
+and `extract_plant_ids_*`) found it asserting **less than production does** in
+three places. Each was mutation-confirmed **MISSED by the check as lifted** and
+**CAUGHT after the fix**:
+
+| # | gap | the mutation it missed |
+|---|---|---|
+| 1 | **no cross-project collision test** — the check only proved a project's patterns unambiguous *among themselves*, but production routes one Discord message against the **whole registry** (`breeding_core`'s registry validator rejects a duplicated prefix for exactly this reason) | a sibling pattern widened during migration, `\bPL` → `\bP[A-Z]?`, routes its own family fine and passes on **both** projects in isolation while silently stealing every `PC..` message from paloma-coma |
+| 2 | **the separator class was never exercised** — every live pattern carries one (`[\s\-]?`, `\s*[-#]?\s*`) and the free-text probe only used the bare `PC01` spelling | eating the class, `\bPC[\s\-]?` → `\bPC`, keeps every assertion green while `PC 01` and `PC-01` — the spellings people actually type — stop routing |
+| 3 | **wrong compile flags** — production compiles with `re.IGNORECASE`; the check compiled with none, so it tested a *stricter* matcher than the one that runs | a scoped `(?-i:\bPC)` re-locks the prefix's case: green under no flags, drops half the real traffic in production |
+
+The logic is now **one function**, `migration_harness.routing_failures`, used
+verbatim by the contract suite **and** by `tools/verify_migration.py`, so the
+two copies that Task 3.4 created cannot drift again. It is unit-tested in
+`tests/test_routing_checks.py` on synthetic registry entries where each failure
+mode is constructed deliberately, rather than only against real data that
+happens to be healthy.
+
+Flag parity is not merely asserted as a constant: `ROUTING_FLAGS ==
+re.IGNORECASE` is checked against `breeding_core.py`'s **source text** (read
+statically — importing the monitor would pull in its Discord/Drive machinery,
+which this sandbox-only suite must never do), so the contract cannot silently
+outlive the matcher it mirrors.
+
+Both new tampers are also asserted as **discriminating cases** in the contract
+and in the verifier — a widened pattern *is* reported as a collision, a
+stripped separator class *is* reported — so neither check can degrade into a
+vacuous pass on data that never had the construct.
+
 ## 5. Acceptance criteria (c) + (d) — sandbox-only, no real side effects
 
 Inherited whole from the shared contract, all now running against this project:
@@ -159,12 +190,15 @@ after, measured with the system `md5sum` binary.
 | shared contract (2 new checks × 4 projects, +8; paloma-coma inherits the existing 27 × 1, +27) | +35 |
 | `tests/test_paloma_coma_migration.py` (new) | +9 |
 | `tests/test_kibungan_migration.py` (generic routing check removed) | −1 |
-| **after** | **570 passed, 0 failed** (zero warnings, `filterwarnings = error`) |
+| **after Task 3.4 as first written** | **570 passed, 0 failed** |
+| §4a: `tests/test_routing_checks.py` (new unit tests for the shared check) | +15 |
+| §4a: shared contract, cross-project collision check × 4 projects | +4 |
+| **after** | **589 passed, 0 failed** (zero warnings, `filterwarnings = error`) |
 
-`tools/verify_migration.py --all`: **159/159 checks PASSED** on a clean tree
-(was 116 — +40 are paloma-coma's own and +3 are the new routing check on the
-three earlier projects). Per project: mule-fuel 38, honey-badger 40, kibungan
-41, paloma-coma 40.
+`tools/verify_migration.py --all`: **167/167 checks PASSED** on a clean tree
+(159 before §4a; the 8 new are the collision, separator and flag-parity checks
+across the four projects). Per project: mule-fuel 40, honey-badger 42,
+kibungan 43, paloma-coma 42.
 
 ## 7. What was NOT done (deliberately)
 
