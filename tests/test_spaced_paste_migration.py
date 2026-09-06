@@ -250,7 +250,7 @@ def test_plant_ids_are_the_roster_with_its_sp04_gap(migrated):
 
 
 def test_photos_drive_url_is_the_empty_string_on_every_plant():
-    """Guards the premise: the first PLANT-level `''` in any project."""
+    """Guards the premise: the first PLANT-level `''` in a migrated project."""
     plants = tracker_json(SPEC)["plants"]
     assert [p["photos_drive_url"] for p in plants] == [""] * len(plants)
 
