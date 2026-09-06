@@ -319,25 +319,54 @@ def verify(spec, check, allow_dirty_baseline=False):
         # []) -- which breaks ID routing in production -- would pass.
         project_md = out / "project.md"
         pristine = project_md.read_text(encoding="utf-8")
+        # label -> (field the report must flag, tampered text)
         tampers = {
-            "auto_create": pristine.replace(
-                f"auto_create: {str(entry['auto_create']).lower()}",
-                f"auto_create: {str(template_default).lower()}",
+            "auto_create": (
+                "auto_create",
+                pristine.replace(
+                    f"auto_create: {str(entry['auto_create']).lower()}",
+                    f"auto_create: {str(template_default).lower()}",
+                ),
             ),
-            "plant_id_prefixes": re.sub(
-                r"plant_id_prefixes:\n(?:- .*\n|  .*\n)+",
-                "plant_id_prefixes: []\n",
-                pristine,
+            "plant_id_prefixes": (
+                "plant_id_prefixes",
+                re.sub(
+                    r"plant_id_prefixes:\n(?:- .*\n|  .*\n)+",
+                    "plant_id_prefixes: []\n",
+                    pristine,
+                ),
             ),
         }
+        # Blanking the list to `[]` is the coarse tamper. On a project with
+        # more than one prefix the realistic regression is losing ONE entry:
+        # the list stays non-empty and stays correct for most plants, so a
+        # gate that only checked presence (or only the first element) would
+        # still pass while ID routing silently died for the rest. Only data
+        # with multiple prefixes can express this, so it is added per-project
+        # rather than assumed, and its absence is reported rather than hidden.
+        if len(entry["plant_id_prefixes"]) > 1:
+            tampers["plant_id_prefixes (one entry dropped)"] = (
+                "plant_id_prefixes",
+                re.sub(
+                    r"(plant_id_prefixes:\n)((?:- .*\n|  .*\n)+)",
+                    lambda m: m.group(1) + "".join(m.group(2).splitlines(True)[:2]),
+                    pristine,
+                ),
+            )
+        else:
+            print(
+                "[NOTE] this project has a single plant-ID prefix, so a "
+                "dropped-entry tamper is not expressible on its data. "
+                "Covered by a project with more than one."
+            )
         try:
-            for field, broken in tampers.items():
+            for label, (field, broken) in tampers.items():
                 if broken == pristine:
                     # Reverting to a value it already holds is a no-op and
                     # cannot be a discriminating test on this project's data.
                     if field == "auto_create" and entry[field] == template_default:
                         continue
-                    check(f"tamper fixture actually modified {field}", False)
+                    check(f"tamper fixture actually modified {label}", False)
                     continue
                 project_md.write_text(broken, encoding="utf-8")
                 tampered = verify_migration(
@@ -347,7 +376,7 @@ def verify(spec, check, allow_dirty_baseline=False):
                     c["field"] for c in tampered.changed_fields.get("project", [])
                 }
                 check(
-                    f"verification rejects a {field} that no longer matches "
+                    f"verification rejects a {label} that no longer matches "
                     "registry.json",
                     (not tampered.ok) and flagged,
                     f"ok={tampered.ok} flagged={flagged}",
