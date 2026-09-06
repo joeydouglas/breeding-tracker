@@ -885,7 +885,52 @@ against lowercase text, the `[-#]?\s*` separator class, the `(?<![A-Z0-9])`
 lookbehind against an alphanumeric neighbour, and the dropped-second-prefix
 tamper. Its generic half was deleted, not left to drift alongside the contract's.
 
-Final state: 570 tests (was 527), 100% green, zero warnings (`pytest -W error`);
-159/159 out-of-band checks across all four projects on a clean tree (was 116);
+Final state: 589 tests (was 527), 100% green, zero warnings (`pytest -W error`);
+171/171 out-of-band checks across all five projects on a clean tree (was 116);
 `tracker.json` md5 `4e59e7b1896f885767824bbacbcef437` unchanged, registry and
 every sibling project untouched.
+
+## Task 3.4 code-quality review: two gaps in the lifted routing check
+
+The check Task 3.4 moved into the shared harness carried two defects of its
+own, both of the same shape — a condition the check *declared* it cared about
+and then never exercised.
+
+**The separator set could not express `#`.** `ROUTING_SEPARATORS` was
+`("", " ", "-")` and was applied to every pattern uniformly. But kibungan's
+live class is `[-#]?`: it advertises `#`, `PK#7` is a spelling people type,
+and no probe ever sent a `#` through any pattern. The obvious fix — add `#` to
+the universal set — is wrong: paloma-coma's `[\s\-]?` legitimately does not
+route `PC#01`, so a universal demand turns a healthy project red. The set is
+therefore per-pattern. `declared_separators` returns the universal three plus
+every `ROUTING_OPTIONAL_SEPARATORS` entry the pattern's own character class
+declares, so each pattern is held to exactly what it claims to accept.
+
+That has a limit worth naming, because it is why the API grew a parameter: a
+migration that *narrows* `[-#]?` to `[-]?` erases the evidence that `#` was
+ever expected, so a self-derived probe set shrinks along with the bug and
+stays green. The source registry pattern is the fixed point that does not
+move, so `routing_failures` takes an explicit `separators=` map and both
+callers pass the set declared by the **source**, holding the migrated pattern
+to what the original advertised. Mutation-confirmed both ways: a pattern that
+declares `#` and fails to route it is caught by the derived set; a class
+narrowed away from `#` is caught only by the source set.
+
+**The duplicate-prefix case was silently skipped.** The cross-project probe
+opened with `if sibling_prefix.upper() in own_prefixes: continue`. That is
+precisely the condition `breeding_core`'s registry validator *raises* on —
+`prefix.casefold()` against `seen_prefixes`, because a message using a
+prefix two projects both declare would route to two crosses. So the one
+registry state production refuses to start on was the only collision this
+check could never report, and it was skipped in the name of avoiding a
+false positive. It is now a reported failure, compared case-insensitively the
+way production compares it, with parity asserted against production's source
+so the rule cannot drift into asserting something production dropped.
+
+Both fixes are behavioural checks on scaffolding, not production code: no
+migration code changed, and the registry, trackers and live project
+directories are untouched.
+
+Final state: 606 tests (was 589), 100% green, zero warnings (`pytest -W error`);
+187/187 out-of-band checks across all five projects on a clean tree (was 171);
+`tracker.json` md5 `4e59e7b1896f885767824bbacbcef437` unchanged.
