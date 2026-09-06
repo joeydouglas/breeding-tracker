@@ -310,6 +310,97 @@ def test_id_routing_regexes_survive_backslash_intact(spec, tmp_path, no_side_eff
 
 
 @spec_param
+def test_the_migrated_patterns_still_route_this_projects_real_plant_ids(
+    spec, tmp_path, no_side_effects
+):
+    """String equality on a regex is not the property that matters — *routing* is.
+
+    Task 3.3 wrote this behaviourally for kibungan because its two prefixes
+    made mis-routing visible there first, but nothing about it is
+    multi-prefix: a single-prefix project whose pattern survived a YAML
+    round-trip as a *plausible-looking but broken* string (an eaten backslash,
+    a dropped inline flag) passes `test_id_routing_regexes_survive_backslash_
+    intact` — which only compares text — while routing nothing. So the
+    patterns are compiled out of the migrated markdown and run against the
+    real IDs for every project.
+
+    Per prefix: it matches exactly its own family's IDs and no other family's;
+    across prefixes: every real ID is routed by exactly one pattern.
+    """
+    import re
+
+    from project_markdown import load_schema, read_project
+
+    _, out = _migrate(spec, tmp_path)
+    prefixes = read_project(
+        out / "project.md", schema=load_schema(PROJECT_TEMPLATE)
+    )["plant_id_prefixes"]
+    assert prefixes, "no routing patterns -- the check would be vacuous"
+
+    ids = sorted(p["id"] for p in _tracker_json(spec)["plants"])
+    assert ids, "no plant IDs -- the check would be vacuous"
+
+    routed_by = {i: [] for i in ids}
+    for entry in prefixes:
+        compiled = re.compile(entry["pattern"])
+        own = [i for i in ids if i.upper().startswith(entry["prefix"].upper())]
+        matched = [i for i in ids if compiled.search(i)]
+        assert own, f"{entry['prefix']} routes no real ID in this project"
+        assert matched == own, (
+            f"{entry['prefix']} pattern routes {matched}, expected {own}"
+        )
+        for i in matched:
+            routed_by[i].append(entry["prefix"])
+
+    for plant_id, hits in routed_by.items():
+        assert len(hits) == 1, f"{plant_id} routed by {hits}, expected exactly one"
+
+
+@spec_param
+def test_the_migrated_patterns_route_ids_embedded_in_free_text(
+    spec, tmp_path, no_side_effects
+):
+    """The patterns exist to find IDs inside Discord prose, not in isolation.
+
+    A pattern that matches a bare `PC01` can still fail on `checked PC01
+    today` if its boundary/lookbehind construct was mangled, and the captured
+    group is what the monitor uses to pick the plant — so the *number* is
+    asserted, not merely that something matched. The negative (an extra
+    leading character must not match) is what proves the boundary construct
+    survived rather than being silently dropped.
+    """
+    import re
+
+    from project_markdown import load_schema, read_project
+
+    _, out = _migrate(spec, tmp_path)
+    prefixes = read_project(
+        out / "project.md", schema=load_schema(PROJECT_TEMPLATE)
+    )["plant_id_prefixes"]
+    ids = sorted(p["id"] for p in _tracker_json(spec)["plants"])
+    checked = 0
+
+    for entry in prefixes:
+        compiled = re.compile(entry["pattern"])
+        for plant_id in ids:
+            if not plant_id.upper().startswith(entry["prefix"].upper()):
+                continue
+            digits = re.search(r"(\d+)$", plant_id).group(1)
+
+            match = compiled.search(f"checked {plant_id} today, looking good")
+            assert match, f"{plant_id} not routed inside free text"
+            assert int(match.group(1)) == int(digits), plant_id
+
+            assert compiled.search(f"X{plant_id}") is None, (
+                f"{plant_id} still matches with a leading character -- the "
+                f"boundary construct did not survive"
+            )
+            checked += 1
+
+    assert checked == len(ids), "did not exercise every real ID"
+
+
+@spec_param
 def test_verification_rejects_routing_fields_reverted_to_template_defaults(
     spec, tmp_path, no_side_effects
 ):

@@ -312,6 +312,47 @@ def verify(spec, check, allow_dirty_baseline=False):
             str([p["pattern"] for p in got_project["plant_id_prefixes"]]),
         )
 
+        # --- the patterns must ROUTE, not merely compare equal ---------------
+        # Text equality proves the migration copied the registry faithfully; it
+        # says nothing about whether the result routes anything. A pattern that
+        # is preserved perfectly but is broken at source (or that collides with
+        # a sibling family) reads as clean under an equality check and silently
+        # drops every Discord note for that project. Compiled out of the
+        # MIGRATED markdown, run against the real IDs and against free text.
+        source_ids = sorted(p["id"] for p in source_plants)
+        routed_by = {i: [] for i in source_ids}
+        routing_failures = []
+        for prefix_entry in got_project["plant_id_prefixes"]:
+            compiled = re.compile(prefix_entry["pattern"])
+            own = [
+                i
+                for i in source_ids
+                if i.upper().startswith(prefix_entry["prefix"].upper())
+            ]
+            matched = [i for i in source_ids if compiled.search(i)]
+            if matched != own or not own:
+                routing_failures.append(
+                    f"{prefix_entry['prefix']}: routes {matched}, expected {own}"
+                )
+            for i in matched:
+                routed_by[i].append(prefix_entry["prefix"])
+            for plant_id in own:
+                digits = re.search(r"(\d+)$", plant_id).group(1)
+                free = compiled.search(f"checked {plant_id} today, looking good")
+                if not free or int(free.group(1)) != int(digits):
+                    routing_failures.append(f"{plant_id}: not routed in free text")
+                if compiled.search(f"X{plant_id}"):
+                    routing_failures.append(
+                        f"{plant_id}: matches with a leading char (boundary lost)"
+                    )
+        ambiguous = [i for i, hits in routed_by.items() if len(hits) != 1]
+        check(
+            "every real plant ID is routed by exactly one migrated pattern, "
+            "bare and in free text",
+            not routing_failures and not ambiguous and bool(source_ids),
+            str(routing_failures[:5] + [f"ambiguous={ambiguous[:5]}"]),
+        )
+
         # --- the gate must see the registry-sourced routing fields -----------
         # These have no tracker counterpart, so a verification driven by
         # tracker.json alone treats them as "not in the source" and never

@@ -144,7 +144,47 @@ KIBUNGAN = ProjectSpec(
     ),
 )
 
-#: Every project whose migration has been accepted. Task 3.4 appends here.
-PROJECT_SPECS = [MULE_FUEL, HONEY_BADGER_HAZE, KIBUNGAN]
+PALOMA_COMA = ProjectSpec(
+    slug="paloma-coma",
+    plant_count=5,
+    project_keys=frozenset(
+        {
+            "breeder_lineage",
+            "created",
+            "cross_name",
+            "drive_folders",
+            "genetics",
+            "github_pages_url",
+            "github_repo",
+            "google_sheet_id",
+            "google_sheet_url",
+            "last_updated",
+            "notes_meta",
+            "plants",
+        }
+    ),
+    plant_keys=_COMMON_PLANT_KEYS,
+    notes=(
+        "The SMALLEST project migrated so far (5 plants) and the first where "
+        "EVERY optional phenotype field -- sex, germ_date, veg_start, "
+        "flower_flip, harvest_date, vigor, structure, terpene_notes, issues "
+        "AND selection_notes -- is null on every plant. All ten nullable "
+        "columns are empty at once, so a writer that omitted an entirely-null "
+        "field, or a reader that skipped a frontmatter key it never saw with a "
+        "value, loses ten fields per plant here. No earlier project has all "
+        "ten empty together: mule-fuel's terpene_notes is populated and the "
+        "other two also carry selection_notes. Only id/cross/status/photos/"
+        "notes carry data. "
+        "Registry auto_create is TRUE while the template default is false "
+        "(third discriminating case for Task 3.0 §8), with a single PC "
+        "prefix. IDs are non-contiguous: PC01 then PC04..PC07 (no PC02/PC03). "
+        "Its notes_meta.migration_note enumerates the five tabs by plant ID, "
+        "so unlike honey-badger's stale note it can be cross-checked against "
+        "the real roster."
+    ),
+)
+
+#: Every project whose migration has been accepted. Task 3.5 appends here.
+PROJECT_SPECS = [MULE_FUEL, HONEY_BADGER_HAZE, KIBUNGAN, PALOMA_COMA]
 
 SPECS_BY_SLUG = {spec.slug: spec for spec in PROJECT_SPECS}

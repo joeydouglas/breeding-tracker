@@ -113,34 +113,17 @@ def test_both_prefixes_survive_in_order_with_exact_patterns(migrated):
     }
 
 
-def test_the_migrated_patterns_still_route_every_real_plant_id(migrated):
-    """String equality is not the property that matters — *routing* is.
-
-    The patterns are compiled out of the migrated markdown and run against the
-    real IDs: PK matches exactly the ten PK plants, PL exactly the three PL
-    plants, and neither matches the other family. A YAML round-trip that ate a
-    backslash or dropped the `(?i)` would compile to something that still looks
-    plausible while routing nothing.
-    """
-    _, out = migrated
-    got = _project(out)["plant_id_prefixes"]
-    routed = {
-        p["prefix"]: [i for i in EXPECTED_IDS if re.compile(p["pattern"]).search(i)]
-        for p in got
-    }
-    assert routed["PK"] == [i for i in EXPECTED_IDS if i.startswith("PK")]
-    assert routed["PL"] == [i for i in EXPECTED_IDS if i.startswith("PL")]
-    assert len(routed["PK"]) == 10
-    assert len(routed["PL"]) == 3
-    assert sorted(routed["PK"] + routed["PL"]) == EXPECTED_IDS
-
-
 def test_the_migrated_patterns_still_route_realistic_discord_text(migrated):
-    """The patterns exist to catch free-text notes, not clean IDs.
+    """The `(?i)` / `[-#]` specifics only this project's patterns have.
 
-    Exercises the parts most likely to be mangled by a YAML round-trip: the
-    `(?i)` inline flag (lowercase `pk-7`), the `[-#]?\\s*` separator class and
-    the `(?<![A-Z0-9])` lookbehind that stops `SPK12` matching.
+    The shared contract now compiles every project's patterns out of the
+    migrated markdown and routes the real IDs and `checked <ID> today` prose
+    (`test_the_migrated_patterns_still_route_this_projects_real_plant_ids`,
+    `..._route_ids_embedded_in_free_text`), so that is not repeated here. What
+    remains is what only these patterns can exercise: the `(?i)` inline flag
+    against genuinely lowercase text, the `[-#]?\\s*` separator class, and the
+    `(?<![A-Z0-9])` lookbehind against an alphanumeric neighbour rather than
+    the generic contract's `X` prefix.
     """
     _, out = migrated
     patterns = {p["prefix"]: re.compile(p["pattern"]) for p in _project(out)["plant_id_prefixes"]}
