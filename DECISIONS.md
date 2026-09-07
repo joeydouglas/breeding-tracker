@@ -786,3 +786,72 @@ branches (non-dict top level, non-list `projects`, unsupported schema version,
 missing slug, duplicate slug, prefix spec missing a key, invalid regex,
 zero-prefix project) also got tests in the same file — the messages were
 already well written, they were simply unexercised.
+
+## NICK-965 — `plant_id` is the canonical plant-ID key; `id` stays readable
+
+**The bug.** `breeding_core.update_plant`/`make_blank_plant` and
+`markdown_backend`'s two write paths all hard-coded the dict key `'id'`, but
+every live `plants/<ID>.md` on disk carries `plant_id:` frontmatter. Against
+the real corpus every plant therefore read as having no ID at all:
+`AUTO_CREATE: False` projects (Lantz, Mule Fuel, Spaced Paste) reported real
+plants as "not found", and `AUTO_CREATE: True` ones (Paloma Coma, Honey
+Badger Haze, Kibungan) fell through to auto-create and then crashed inside
+`save_tracker` with `ValueError: ... missing or non-string id: None` — after
+`update_plant` had already entered its write path.
+
+**Why 414 tests missed it.** Every fixture in this suite was built either
+synthetically (`{'id': 'SB01', ...}`) or from a JSON-era `tracker.json` (also
+`id`-keyed) and then fed *through* the markdown backend. A closed loop: the
+backend read back the spelling the test had just written it, so nothing ever
+compared the code against the bytes actually on disk. `tests/
+test_nick965_plant_id_key.py` closes that hole by asserting against the real
+project directories — a copied, not regenerated, sandbox — so this class of
+bug fails the suite instead of reaching production.
+
+**The decision** (Joey, NICK-701, 2026-09-07): `plant_id` is canonical going
+forward. `id` remains READABLE as the legacy spelling.
+
+**Design.** A new `plant_record.py` holds `CANONICAL_ID_KEY`, `LEGACY_ID_KEY`
+and `plant_id_of(plant)`. It is its own module because both `breeding_core`
+and `markdown_backend` need it and the former imports the latter — putting it
+in either would make the dependency circular or make one backend's private
+detail the other's public API. `json_backend.py` deliberately does not import
+it and is **unmodified**: it is the verbatim 2dd0537 code whose entire purpose
+is reproducing the original `tracker.json` byte for byte.
+
+Reading and writing are split deliberately:
+
+* **Reading** — `plant_id_of` accepts EITHER spelling on EVERY backend, so no
+  existing record can become unmatchable. It returns `None` (not a raise) for
+  a record carrying neither key, preserving the `p.get('id')` hardening above:
+  `save_tracker`'s informative validator error still wins over a `KeyError`.
+  It DOES raise when both keys are present and disagree — that record is
+  corrupt, and picking one silently could route an observation onto the wrong
+  plant or write one plant's file under another's name.
+* **Writing** — only NEW records pick a spelling, via `PLANT_ID_KEYS`
+  (markdown -> `plant_id`, json -> `id`) and `plant_id_key(config)`. Existing
+  records KEEP the key they arrived with: the on-disk spelling is data, and
+  normalising it on every save would churn all 89 live plant files behind the
+  operator's back. `PLANT_ID_KEYS` is keyed by backend NAME and pinned by a
+  test asserting it covers `STORAGE_BACKENDS` exactly, so a backend can never
+  be registered without declaring its spelling and silently inherit a default.
+
+`make_blank_plant`'s `id_key` is a PARAMETER rather than a config lookup so the
+function stays pure — `test_nick592_parsing_spec` executes the JSON-era
+baseline module and compares against it, which requires no side effects. That
+differential still holds exactly: `make_blank_plant(..., id_key='id')` is
+byte-identical to the JSON-era record.
+
+**Provenance correction.** NICK-701 recorded the `plant_id` files as Phase 3
+migration output. They are not. `tracker_migration._plant_id` reads
+`plant.get("id")` and `build_plant_record` copies the source record verbatim,
+so a real migration emits `id:`. The `plant_id`-keyed files are residue of the
+OLD derived-view `update_markdown()` writer, which wrote exactly
+`plant_id`/`cross`/`status` — precisely the 3-key shape every one of those
+files has. This does not change the fix, but it means the live markdown corpus
+is **impoverished, not merely mis-keyed**: Lantz's plant files hold 3 fields
+plus a body, having lost the other 16. Task 7.2 step 2's re-migration is what
+restores them. It also means `breeding-markdown/templates/plant-template.md`
+still declares the field as `id`; aligning the template (so `plant_id` sorts
+into schema position instead of trailing the frontmatter) is re-migration
+work, deliberately out of scope here.

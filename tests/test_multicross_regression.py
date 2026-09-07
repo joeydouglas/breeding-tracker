@@ -74,6 +74,7 @@ if str(MONITOR_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_CORE_DIR))
 
 import breeding_core  # noqa: E402
+from plant_record import ID_KEYS  # noqa: E402
 
 SPEC = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 CASES = SPEC["cases"]
@@ -279,7 +280,15 @@ def _apply(module, plant_id, observation, config):
 
 
 def _plants_by_id(tracker):
-    return {p["id"]: p for p in tracker["plants"]}
+    """Index a roster by plant ID, under either accepted spelling.
+
+    NICK-965: the two arms of this differential replay now legitimately use
+    DIFFERENT id keys -- the JSON-era arm mints ``id`` (its native format)
+    and the markdown arm mints the canonical ``plant_id``. Indexing through
+    ``plant_id_of`` is what lets the comparison stay about the plants'
+    CONTENT, which is what this suite is pinning.
+    """
+    return {breeding_core.plant_id_of(p): p for p in tracker["plants"]}
 
 
 # --------------------------------------------------------------------------
@@ -414,12 +423,28 @@ VIGOR_DEVIATION_FIELD = SPEC["known_deviation_from_json_era"]["field"]
 
 
 def _assert_plant_equal(project, plant_id, md_plant, js_plant):
-    assert set(md_plant) == set(js_plant), (
-        f"{project}/{plant_id}: field set changed between backends -- "
-        f"only in markdown {set(md_plant) - set(js_plant)}, "
-        f"only in JSON {set(js_plant) - set(md_plant)}"
+    # NICK-965: the ID KEY is the one field allowed to be spelled differently
+    # between the arms -- 'plant_id' is canonical for markdown, 'id' is the
+    # JSON era's own native format (and part of NICK-949's byte-for-byte
+    # rollback contract). Compare the id's VALUE explicitly, then exclude the
+    # key from the field-set/field-value differential so this suite keeps
+    # pinning content equivalence rather than re-asserting the spelling this
+    # task deliberately changed.
+    md_identity = breeding_core.plant_id_of(md_plant)
+    js_identity = breeding_core.plant_id_of(js_plant)
+    assert md_identity == js_identity == plant_id, (
+        f"{project}/{plant_id}: plant identity diverged between backends -- "
+        f"JSON era {js_identity!r}, markdown era {md_identity!r}"
     )
-    for field in sorted(md_plant):
+
+    md_fields = set(md_plant) - set(ID_KEYS)
+    js_fields = set(js_plant) - set(ID_KEYS)
+    assert md_fields == js_fields, (
+        f"{project}/{plant_id}: field set changed between backends -- "
+        f"only in markdown {md_fields - js_fields}, "
+        f"only in JSON {js_fields - md_fields}"
+    )
+    for field in sorted(md_fields):
         md_value, js_value = md_plant[field], js_plant[field]
         if field == VIGOR_DEVIATION_FIELD and md_value != js_value:
             # The ONE approved deviation (DECISIONS.md, "Task 2.2"): vigor

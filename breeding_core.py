@@ -27,6 +27,7 @@ from pathlib import Path
 
 import json_backend
 import markdown_backend
+from plant_record import CANONICAL_ID_KEY, LEGACY_ID_KEY, plant_id_of  # noqa: F401
 
 TERPENE_KEYWORDS = ['fuel', 'gas', 'citrus', 'fruity', 'sweet', 'earthy', 'pine', 'skunky', 'diesel']
 STRUCTURE_KEYWORDS = ['frosty', 'dense', 'sandy', 'sticky', 'purple', 'tight', 'fox.*tail', 'stretch']
@@ -61,6 +62,44 @@ STORAGE_BACKENDS = {
 DEFAULT_BACKEND = 'markdown'
 
 BACKEND_CONFIG_KEY = 'BACKEND'
+
+# WHICH ID SPELLING EACH BACKEND WRITES FOR A **NEW** PLANT (NICK-965).
+#
+# This governs creation only -- `plant_id_of` reads both spellings from every
+# backend, so an existing record is always found regardless of how it was
+# written. What differs is the record a project MINTS from scratch, and that
+# has to match its own store's native format:
+#
+#   markdown -> 'plant_id'. Phase 3's migration wrote the whole live corpus
+#       this way and Joey made it canonical (NICK-701, 2026-09-07). A new
+#       plant keyed 'id' would be a second dialect inside a project whose
+#       other files are all 'plant_id' -- exactly the mixed state
+#       mule-fuel-x-nana-glue is being re-migrated to escape.
+#
+#   json -> 'id'. NOT a bug being preserved: 'id' is the pre-Phase-2
+#       tracker.json format's own key, and `json_backend` exists to reproduce
+#       that format byte for byte so a NICK-949 rollback emits no spurious
+#       diff. Minting 'plant_id' into a rolled-back project's tracker.json
+#       would break exactly the contract the rollback path was built to hold.
+#
+# Keyed by backend NAME (not module) so it stays a plain, inspectable
+# declaration, and `test_every_registered_backend_declares_a_plant_id_key`
+# fails loudly if a backend is ever registered without one -- rather than
+# letting it silently inherit a default and write the wrong spelling.
+PLANT_ID_KEYS = {
+    'markdown': CANONICAL_ID_KEY,
+    'json': LEGACY_ID_KEY,
+}
+
+
+def plant_id_key(config=None):
+    """The ID key a NEW plant record gets under ``config``'s backend.
+
+    See ``PLANT_ID_KEYS``. Existing records are matched by ``plant_id_of``,
+    which accepts either spelling on every backend; this only decides what
+    ``make_blank_plant`` writes.
+    """
+    return PLANT_ID_KEYS[backend_name(config)]
 
 
 def backend_name(config=None):
@@ -208,12 +247,21 @@ def parse_observation(text):
     return observation
 
 
-def make_blank_plant(plant_id, cross_name):
+def make_blank_plant(plant_id, cross_name, id_key=CANONICAL_ID_KEY):
     """Fresh plant record for auto-create-on-first-mention projects
     (pheno hunts that start with an empty roster: Paloma Coma, Honey
-    Badger Haze, Kibungan)."""
+    Badger Haze, Kibungan).
+
+    ``id_key`` is the spelling the ID is stored under, and defaults to the
+    canonical ``plant_id`` (NICK-965). Callers that persist through the JSON
+    backend must pass ``id_key='id'`` -- ``update_plant`` does this via
+    ``plant_id_key(config)``. The key is a parameter rather than read from a
+    config inside here so this function stays pure and side-effect-free,
+    which ``test_nick592_parsing_spec`` relies on when it executes the
+    JSON-era baseline module.
+    """
     return {
-        'id': plant_id,
+        id_key: plant_id,
         'cross': cross_name,
         'status': 'active',
         'sex': None,
@@ -247,18 +295,33 @@ def update_plant(plant_id, observation, config, photo_count=0):
 
     plant = None
     for p in tracker['plants']:
-        # p.get('id'), not p['id']: a hand-edited/corrupted plant file with no
-        # id would otherwise raise an opaque KeyError('id') here, pre-empting
-        # save_tracker's own informative "plant record has a missing or
-        # non-string id" ValueError. Degrade gracefully so the useful error
-        # is the one that surfaces.
-        if p.get('id') == plant_id:
+        # plant_id_of(p), not p['id'] (NICK-965). Two things ride on this:
+        #
+        # 1. It accepts BOTH accepted spellings, so the real migrated corpus
+        #    ('plant_id:', written by Phase 3) and the legacy/JSON-backend
+        #    records ('id') both match. Hard-coding 'id' here is the bug this
+        #    fixes: against live data every plant read as ID-less, so Lantz
+        #    reported real plants as "not found" and the auto-create projects
+        #    crashed inside save_tracker.
+        # 2. It returns None rather than raising for a hand-edited record with
+        #    no id at all, so save_tracker's informative "plant record has a
+        #    missing or non-string id" ValueError still wins over an opaque
+        #    KeyError (the DECISIONS.md "p.get('id') hardening", preserved).
+        #
+        # `and plant_id_of(p)` guards the None case: a plant_id of None must
+        # never match, or an ID-less record would swallow every observation.
+        if plant_id_of(p) and plant_id_of(p) == plant_id:
             plant = p
             break
 
     if not plant:
         if config.get('AUTO_CREATE'):
-            plant = make_blank_plant(plant_id, config['CROSS_NAME'])
+            # The new record is minted in the SPELLING THIS PROJECT'S BACKEND
+            # writes (see PLANT_ID_KEYS) -- 'plant_id' on markdown, 'id' on a
+            # rolled-back JSON project.
+            plant = make_blank_plant(
+                plant_id, config['CROSS_NAME'], id_key=plant_id_key(config)
+            )
             tracker['plants'].append(plant)
         else:
             return f"\u274c Plant {plant_id} not found"

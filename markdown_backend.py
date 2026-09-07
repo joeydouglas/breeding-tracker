@@ -59,6 +59,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from plant_record import CANONICAL_ID_KEY, plant_id_of
+
 _DEFAULT_MARKDOWN_REPO = Path(__file__).resolve().parents[1] / "breeding-markdown"
 
 
@@ -137,7 +139,9 @@ def _validate_plant_id(value):
     exactly what is enforced rather than implying broader coverage.
     """
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"plant record has a missing or non-string id: {value!r}")
+        raise ValueError(
+            f"plant record has a missing or non-string {CANONICAL_ID_KEY}: {value!r}"
+        )
     if value != value.strip():
         raise ValueError(f"plant id has leading/trailing whitespace: {value!r}")
     if value in (".", "..") or "/" in value or "\\" in value or "\0" in value:
@@ -148,6 +152,20 @@ def _validate_plant_id(value):
     if Path(value).name != value or Path(value).is_absolute():
         raise ValueError(f"unsafe plant id (not a bare filename): {value!r}")
     return value
+
+
+def _plant_id_for_write(plant):
+    """The validated id of a plant about to be written.
+
+    NICK-965: reads either accepted spelling via ``plant_id_of`` -- this
+    module used to hard-code ``plant.get("id")``, which made it unable to
+    save the very corpus Phase 3's migration produced (all live plant files
+    are ``plant_id:``-keyed). ``plant_id_of`` raises on a record whose two
+    id keys disagree, and returns ``None`` for one carrying neither, so the
+    informative ``_validate_plant_id`` error is still what a hand-edited,
+    id-less file produces.
+    """
+    return _validate_plant_id(plant_id_of(plant))
 
 
 def _project_dir(tracker_file) -> Path:
@@ -250,7 +268,7 @@ def save_plant(plant, project_dir) -> None:
         raise TypeError(f"plant must be a dict, got {type(plant).__name__}")
 
     project_markdown, plant_markdown, _project_schema, plant_schema = _schemas()
-    plant_id = _validate_plant_id(plant.get("id"))
+    plant_id = _plant_id_for_write(plant)
 
     path = Path(project_dir).expanduser() / PLANTS_DIR / f"{plant_id}.md"
     merged = {}
@@ -309,7 +327,7 @@ def save_tracker(tracker, tracker_file) -> None:
     for plant in plants:
         if not isinstance(plant, dict):
             raise TypeError(f"each plant must be a dict, got {type(plant).__name__}")
-        plant_id = _validate_plant_id(plant.get("id"))
+        plant_id = _plant_id_for_write(plant)
         if plant_id in order:
             raise ValueError(f"duplicate plant id in roster: {plant_id!r}")
         order.append(plant_id)

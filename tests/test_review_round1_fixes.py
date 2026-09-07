@@ -223,7 +223,7 @@ def test_idless_plant_in_roster_surfaces_the_informative_validator_error(
     }
     observation = core.parse_observation("Ltz42 vigor 8, fuel, keeper")
 
-    with pytest.raises(ValueError, match="missing or non-string id"):
+    with pytest.raises(ValueError, match="missing or non-string plant_id"):
         core.update_plant("Ltz42", observation, config)
 
 

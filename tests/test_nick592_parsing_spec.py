@@ -189,9 +189,22 @@ def test_keyword_vocabularies_are_unchanged(json_era):
 
 
 def test_make_blank_plant_is_unchanged(json_era):
-    assert breeding_core.make_blank_plant("MG04", "X x Y") == json_era.make_blank_plant(
-        "MG04", "X x Y"
-    )
+    """NICK-965: the ID's KEY changed (``id`` -> the canonical ``plant_id``)
+    and nothing else did. Both halves are pinned:
+
+    * asked for the legacy spelling, this must still reproduce the JSON-era
+      record EXACTLY -- that is what a rolled-back, JSON-backed project gets;
+    * with the new default, only the id key's spelling differs.
+    """
+    legacy = breeding_core.make_blank_plant("MG04", "X x Y", id_key="id")
+    assert legacy == json_era.make_blank_plant("MG04", "X x Y")
+
+    canonical = breeding_core.make_blank_plant("MG04", "X x Y")
+    assert canonical["plant_id"] == "MG04"
+    assert "id" not in canonical
+    assert {k: v for k, v in canonical.items() if k != "plant_id"} == {
+        k: v for k, v in legacy.items() if k != "id"
+    }
 
 
 # --------------------------------------------------------------------------
@@ -278,7 +291,7 @@ def test_update_plant_field_merge_matches_the_committed_spec(case, tmp_path):
     plant = next(
         p
         for p in breeding_core.load_tracker(tracker_file)["plants"]
-        if p["id"] == PLANT_ID
+        if breeding_core.plant_id_of(p) == PLANT_ID
     )
     for field, expected in case["plant_after"].items():
         assert plant[field] == expected, (
@@ -314,7 +327,7 @@ def test_status_is_left_alone_when_the_observation_has_no_keyword(tmp_path):
     plant = next(
         p
         for p in breeding_core.load_tracker(tracker_file)["plants"]
-        if p["id"] == PLANT_ID
+        if breeding_core.plant_id_of(p) == PLANT_ID
     )
     assert plant["status"] == "top_keeper"
     assert plant["vigor"] == "7"
@@ -349,7 +362,7 @@ def test_vigor_is_stored_as_a_string_by_the_markdown_backend(tmp_path):
     plant = next(
         p
         for p in breeding_core.load_tracker(tracker_file)["plants"]
-        if p["id"] == PLANT_ID
+        if breeding_core.plant_id_of(p) == PLANT_ID
     )
     # On disk / after reload: a string.
     assert plant["vigor"] == "9"
@@ -410,7 +423,7 @@ def test_status_result_is_identical_under_markdown_and_the_json_era(tmp_path):
         markdown_status = next(
             p
             for p in breeding_core.load_tracker(tracker_file)["plants"]
-            if p["id"] == PLANT_ID
+            if breeding_core.plant_id_of(p) == PLANT_ID
         )["status"]
 
         assert markdown_status == legacy_status, (
@@ -441,7 +454,7 @@ def test_terpene_notes_accumulate_across_observations(tmp_path):
         stored = next(
             p
             for p in breeding_core.load_tracker(tracker_file)["plants"]
-            if p["id"] == PLANT_ID
+            if breeding_core.plant_id_of(p) == PLANT_ID
         )
         assert stored["terpene_notes"] == step["expected"], (
             f"existing={step['existing']!r} + {step['text']!r} -> "
@@ -461,7 +474,7 @@ def test_observation_log_gains_one_entry_per_observation(tmp_path):
     plant = next(
         p
         for p in breeding_core.load_tracker(tracker_file)["plants"]
-        if p["id"] == PLANT_ID
+        if breeding_core.plant_id_of(p) == PLANT_ID
     )
     assert plant["observation_log"].count("### ") == 2
     assert f"{PLANT_ID} vigor 5" in plant["observation_log"]
@@ -485,7 +498,7 @@ def test_structure_is_reported_but_never_persisted(tmp_path):
     plant = next(
         p
         for p in breeding_core.load_tracker(tracker_file)["plants"]
-        if p["id"] == PLANT_ID
+        if breeding_core.plant_id_of(p) == PLANT_ID
     )
     assert plant["structure"] is None
 

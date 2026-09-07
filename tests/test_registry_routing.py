@@ -595,7 +595,9 @@ def test_acceptance_new_project_config_drives_a_real_ingestion(
 
     assert "ZQ12" in result
     tracker = core.load_tracker(config["TRACKER_FILE"])
-    plant = next(p for p in tracker["plants"] if p["id"] == "ZQ12")
+    plant = next(
+        p for p in tracker["plants"] if core.plant_id_of(p) == "ZQ12"
+    )
     assert plant["status"] == "top_keeper"
     assert (new_dir / "plants" / "ZQ12.md").exists()
 
