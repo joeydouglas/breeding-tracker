@@ -46,7 +46,6 @@ to anyone working from the spec.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -147,8 +146,11 @@ def apply(plan_obj: Plan, target, *, overwrite: bool = False) -> Path:
         )
 
     target.parent.mkdir(parents=True, exist_ok=True)
+    # dumps_tracker, not a bare json.dumps: YAML's implicit resolvers hand us
+    # native datetime/date values for unquoted timestamp-shaped frontmatter
+    # scalars, which the stock encoder cannot serialise (NICK-1013).
     target.write_text(
-        json.dumps(plan_obj.tracker, indent=2, ensure_ascii=False) + "\n",
+        reverse_migration.dumps_tracker(plan_obj.tracker) + "\n",
         encoding="utf-8",
     )
     return target

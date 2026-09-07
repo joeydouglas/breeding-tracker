@@ -44,6 +44,8 @@ explicit ``--apply``.
 
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -435,6 +437,53 @@ def reverse_migrate_tracker(
     record, order = read_project_record(project_dir)
     record[PLANTS_KEY] = read_plant_records(project_dir, plant_schema, order)
     return record
+
+
+# ---------------------------------------------------------- serialise ------
+
+
+def json_default(value: Any) -> str:
+    """``json.dumps(default=...)`` for types YAML can legitimately produce.
+
+    WHY (NICK-1013). Plant frontmatter is parsed by PyYAML, whose implicit
+    resolvers turn an UNQUOTED timestamp-shaped scalar into a native
+    ``datetime.datetime`` (and a bare date into ``datetime.date``). Real data
+    already does this: ``mule-fuel-x-nana-glue`` carries
+    ``last_updated: 2026-08-22 17:14:06.760534`` -- unquoted -- on most of its
+    plants, an "extra" field that predates the markdown refactor and is not in
+    the canonical plant template. Reverse migration and verification both
+    handle the value fine; only the final ``json.dumps`` used to die with
+    ``TypeError: Object of type datetime is not JSON serializable``, aborting
+    the rollback rehearsal after every gate had already passed.
+
+    This is deliberately GENERAL rather than keyed on ``last_updated``: the
+    crash is a property of the VALUE's type, not of any one field name, so a
+    future project field (or a future template addition) of the same shape must
+    not reintroduce it. A real value's actual type must never be an unhandled
+    crash in the tool a rollback depends on.
+
+    ISO-8601 (``.isoformat()``) is chosen over ``str(value)`` because it is the
+    standard, unambiguously re-parseable spelling: the emitted string feeds
+    straight back into ``datetime.fromisoformat``. Anything genuinely
+    unserialisable still raises ``TypeError`` -- this widens the encoder, it
+    does not silence it.
+    """
+    if isinstance(value, (_dt.datetime, _dt.date, _dt.time)):
+        return value.isoformat()
+    raise TypeError(
+        f"Object of type {type(value).__name__} is not JSON serializable"
+    )
+
+
+def dumps_tracker(tracker: Mapping[str, Any], **kwargs: Any) -> str:
+    """Serialise a tracker dict, tolerating YAML-native date/datetime values.
+
+    The single place a reverse-migrated tracker becomes JSON text, so the
+    :func:`json_default` widening cannot be forgotten at one call site.
+    """
+    kwargs.setdefault("indent", 2)
+    kwargs.setdefault("ensure_ascii", False)
+    return json.dumps(tracker, default=json_default, **kwargs)
 
 
 # --------------------------------------------------------------- verify ----
