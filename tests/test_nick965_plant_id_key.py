@@ -42,6 +42,7 @@ goes to a pytest ``tmp_path``.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -385,7 +386,20 @@ def test_a_legacy_id_keyed_live_plant_still_works(tmp_path, no_side_effects):
     assert "\u274c" not in result, result
 
     text = (sandbox / "plants" / f"{plant_id}.md").read_text(encoding="utf-8")
-    assert text.startswith("---\nid:"), "a legacy record's own spelling was rewritten"
+    frontmatter = text.split("\n---\n", 1)[0]
+    # The invariant is the SPELLING, not the field ORDER. NICK-966 removed
+    # `id` from plant-template.md (canonical is `plant_id`), so a legacy
+    # record's `id` key is no longer schema-ordered and now lands in the
+    # unordered tail of the frontmatter instead of on line 2. What must still
+    # hold -- and is what this test exists for -- is that the record keeps
+    # its OWN spelling and does not silently gain the other one, which is the
+    # dual-key shape `plant_id_of` rejects as corrupt.
+    assert re.search(rf"^id: {plant_id}$", frontmatter, re.M), (
+        f"a legacy record's own spelling was rewritten: {frontmatter!r}"
+    )
+    assert "plant_id:" not in frontmatter, (
+        f"a legacy record gained the other spelling too: {frontmatter!r}"
+    )
 
 
 def test_both_spellings_coexist_in_one_roster_save(tmp_path, no_side_effects):
