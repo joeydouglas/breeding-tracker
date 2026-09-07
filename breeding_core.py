@@ -70,12 +70,21 @@ def backend_name(config=None):
     ``BACKEND`` key. Raises ``ValueError`` for a name that is not registered.
 
     The unknown-name case FAILS LOUD, and deliberately does not case-fold or
-    strip -- the same call ``_validate_registry`` makes about ambiguous
-    routing config. A config saying ``'JSON'`` or ``'sqlite'`` is a typo or a
+    strip -- the same call `_validate_registry` makes about ambiguous
+    routing config. A config saying 'JSON' or 'sqlite' is a typo or a
     half-finished edit; quietly falling back to markdown would write a
     rolled-back project's observations into the store nobody is reading.
+    An explicit BACKEND: '' is the SAME kind of half-finished edit, not an
+    absent key -- it fails loud too, matching _validate_registry's own
+    stance (M1, NICK-949 stage-2 review round 4): the two checks disagreed
+    on this exact case before, which is the kind of gap this file exists
+    to close.
     """
-    name = (config or {}).get(BACKEND_CONFIG_KEY) or DEFAULT_BACKEND
+    config = config or {}
+    if BACKEND_CONFIG_KEY not in config or config[BACKEND_CONFIG_KEY] is None:
+        name = DEFAULT_BACKEND
+    else:
+        name = config[BACKEND_CONFIG_KEY]
     if name not in STORAGE_BACKENDS:
         # Name the project too (CROSS_NAME, falling back to the tracker path
         # if a config was built without it) -- an unqualified "unknown
@@ -823,23 +832,32 @@ def config_for_project(entry):
     """
     breeding_dir = Path(entry['breeding_dir']).expanduser()
 
+    # entry.get('cross_name', entry['slug']) is NOT enough: .get()'s default
+    # only fires when the key is ABSENT, not when it's present-but-None (a
+    # registry entry with `"cross_name": null` -- JSON's explicit-null, not
+    # a missing key). NICK-949 stage-2 review round 4 (M2) caught this
+    # producing a config with CROSS_NAME itself set to None, which then also
+    # broke the backend-error project-naming fix below in the exact same
+    # way. `entry['slug']` is always present (checked by _validate_registry
+    # before this function is ever called with untrusted data).
+    cross_name = entry.get('cross_name') or entry['slug']
+
     config = {
         'BREEDING_DIR': breeding_dir,
         'TRACKER_FILE': breeding_dir / 'tracker.json',
         'GITHUB_REPO': entry.get('github_repo'),
         'DISABLE_GITHUB_PUSH': os.environ.get('BREEDING_DISABLE_PUSH') == '1',
-        'CROSS_NAME': entry.get('cross_name', entry['slug']),
+        'CROSS_NAME': cross_name,
         'AUTO_CREATE': bool(entry.get('auto_create')),
         # NICK-949: storage backend, per project. Absent from the registry
         # entry => markdown, the current behaviour for every live project.
         # Validated here rather than at first read so a bad name surfaces when
         # the config is built, not mid-ingestion. Pass CROSS_NAME/slug through
         # so an invalid registry entry's error names the actual project, not
-        # '<unknown project>' -- entry['slug'] is always present (checked by
-        # _validate_registry before config_for_project is ever called).
+        # '<unknown project>'.
         'BACKEND': backend_name({
             'BACKEND': entry.get('backend'),
-            'CROSS_NAME': entry.get('cross_name', entry['slug']),
+            'CROSS_NAME': cross_name,
         }),
     }
 

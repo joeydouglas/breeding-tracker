@@ -340,6 +340,66 @@ def test_unknown_backend_in_registry_is_rejected_at_load_time(meta_repo, tmp_pat
         core.load_registry()
 
 
+def test_config_for_project_names_the_project_for_an_unknown_backend(tmp_path):
+    """NICK-949 stage-2 review, round 4 (I3): the fix that threads
+    entry['cross_name'] through to backend_name() lives entirely inside
+    ``config_for_project`` -- and nothing called ``config_for_project``
+    directly with a bad backend before this test. A reviewer proved that by
+    reverting just that one line and re-running the full suite: it stayed
+    green. This calls ``config_for_project`` the same way
+    ``registry_entry(registry=...)``-based callers do (bypassing
+    ``load_registry``/``_validate_registry`` entirely), which is exactly the
+    path where this fix is load-bearing, not redundant.
+    """
+    entry = _project_entry("cfp-bad-backend", tmp_path / "cfpbb",
+                            [{"prefix": "CB", "pattern": r"\bCB(\d{1,2})\b"}],
+                            backend="sqlite")
+    with pytest.raises(ValueError, match=r"sqlite.*cfp-bad-backend"):
+        core.config_for_project(entry)
+
+
+def test_config_for_project_falls_back_to_slug_when_cross_name_absent(tmp_path):
+    """Same fix, the other branch: entry.get('cross_name', entry['slug'])
+    must actually fall back, not KeyError or silently drop the name, when an
+    entry has no explicit 'cross_name' at all (only 'slug' is required)."""
+    entry = {
+        "slug": "no-cross-name-project",
+        "breeding_dir": str(tmp_path / "ncnp"),
+        "github_repo": "joeydouglas/no-cross-name-project",
+        "auto_create": False,
+        "plant_id_prefixes": [{"prefix": "NC", "pattern": r"\bNC(\d{1,2})\b"}],
+        "backend": "sqlite",
+    }
+    assert "cross_name" not in entry
+    with pytest.raises(ValueError, match=r"sqlite.*no-cross-name-project"):
+        core.config_for_project(entry)
+
+
+def test_config_for_project_falls_back_to_slug_when_cross_name_is_explicitly_null(tmp_path):
+    """NICK-949 stage-2 review round 4 (M2): a registry entry with
+    ``"cross_name": null`` (JSON explicit-null, a PRESENT key, not a missing
+    one) must ALSO fall back to slug -- entry.get('cross_name', fallback)
+    does not fall back for a present-but-None value, only an absent key.
+    This is a stricter case than the absent-key test above: it also proves
+    config['CROSS_NAME'] itself (not just the error message) is never left
+    as None, since that would silently break the backend-error project-
+    naming fix for exactly this input."""
+    entry = {
+        "slug": "null-cross-name-project",
+        "cross_name": None,
+        "breeding_dir": str(tmp_path / "ncnp2"),
+        "github_repo": "joeydouglas/null-cross-name-project",
+        "auto_create": False,
+        "plant_id_prefixes": [{"prefix": "NL", "pattern": r"\bNL(\d{1,2})\b"}],
+    }
+    got = core.config_for_project(entry)
+    assert got["CROSS_NAME"] == "null-cross-name-project"
+
+    entry["backend"] = "sqlite"
+    with pytest.raises(ValueError, match=r"sqlite.*null-cross-name-project"):
+        core.config_for_project(entry)
+
+
 def test_registry_entry_raises_for_unknown_slug():
     with pytest.raises(KeyError):
         core.registry_entry("no-such-project")

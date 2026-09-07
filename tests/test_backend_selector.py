@@ -29,6 +29,7 @@ never written.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -124,6 +125,28 @@ def test_unknown_backend_error_falls_back_to_tracker_file_without_cross_name():
     config = {'BACKEND': 'sqlite', 'TRACKER_FILE': Path('/tmp/nope/tracker.json')}
     with pytest.raises(ValueError, match=r"nope/tracker\.json"):
         core.backend_name(config)
+
+
+def test_empty_string_backend_fails_loud_not_defaults(tmp_path):
+    """NICK-949 stage-2 review round 4 (M1): backend_name() used to treat
+    BACKEND: '' the same as an absent key (falsy-or fallback), silently
+    defaulting to markdown -- while _validate_registry() already rejected an
+    empty backend as an explicit invalid value. The two checks disagreeing
+    on the same input is exactly the class of gap this module exists to
+    close; an empty string is a half-finished edit, not an intentional
+    'use the default' signal, same reasoning as any other typo'd name."""
+    with pytest.raises(ValueError, match=r"unknown storage backend ''"):
+        core.backend_name(_config(tmp_path, ''))
+
+
+def test_none_and_missing_backend_key_still_default_to_markdown(tmp_path):
+    """The empty-string fix (above) must not regress the genuinely-absent
+    cases: no config, no BACKEND key, and an explicit BACKEND: None must all
+    still mean 'use the default', since that's the whole point of every
+    existing wrapper/registry entry that predates NICK-949."""
+    assert core.backend_name(None) == core.DEFAULT_BACKEND
+    assert core.backend_name({}) == core.DEFAULT_BACKEND
+    assert core.backend_name({'BACKEND': None}) == core.DEFAULT_BACKEND
 
 
 def test_unknown_backend_fails_loud_on_load_and_save(tmp_path, small_tracker):
@@ -372,9 +395,24 @@ WRAPPERS = [
 @pytest.mark.parametrize('project', WRAPPERS)
 def test_every_live_wrapper_declares_its_backend_explicitly(project):
     """No live project may rely on the implicit default: a future reader
-    flipping a backend must be able to SEE the key that is being flipped."""
+    flipping a backend must be able to SEE the key that is being flipped.
+
+    NICK-949 stage-2 review round 4 (M3, carried from round 1's M2, flagged
+    twice as still open): this used to assert the literal substring
+    "'BACKEND': 'markdown'", which pins the VALUE, not just the key's
+    presence -- it would fail the moment Task 7.2 legitimately flips a
+    project's wrapper to 'BACKEND': 'json' during its cutover/rollback
+    rehearsal, for a reason that has nothing to do with what this test is
+    actually meant to guard. Assert the key exists with a valid value
+    instead, which is what "declares its backend explicitly" actually
+    means."""
     path = Path.home() / '.hermes' / 'breeding' / project / 'monitor_breeding_notes.py'
     if not path.exists():
         pytest.skip(f'wrapper for {project} not present')
     source = path.read_text(encoding='utf-8')
-    assert "'BACKEND': 'markdown'" in source, project
+    match = re.search(r"'BACKEND':\s*'(\w+)'", source)
+    assert match, f"{project}'s wrapper does not declare a 'BACKEND' key at all"
+    assert match.group(1) in core.STORAGE_BACKENDS, (
+        f"{project}'s wrapper declares BACKEND={match.group(1)!r}, "
+        f"not one of {sorted(core.STORAGE_BACKENDS)}"
+    )
