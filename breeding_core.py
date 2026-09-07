@@ -77,9 +77,15 @@ def backend_name(config=None):
     """
     name = (config or {}).get(BACKEND_CONFIG_KEY) or DEFAULT_BACKEND
     if name not in STORAGE_BACKENDS:
+        # Name the project too (CROSS_NAME, falling back to the tracker path
+        # if a config was built without it) -- an unqualified "unknown
+        # backend 'JSON'" across 6 near-identical wrappers leaves the reader
+        # to go find which one, exactly the failure mode _validate_registry's
+        # own comment says this codebase rejects for registry.json errors.
+        project = (config or {}).get('CROSS_NAME') or (config or {}).get('TRACKER_FILE') or '<unknown project>'
         raise ValueError(
-            f"unknown storage backend {name!r} in config[{BACKEND_CONFIG_KEY!r}]; "
-            f"expected one of {sorted(STORAGE_BACKENDS)}"
+            f"unknown storage backend {name!r} in config[{BACKEND_CONFIG_KEY!r}] "
+            f"for project {project!r}; expected one of {sorted(STORAGE_BACKENDS)}"
         )
     return name
 

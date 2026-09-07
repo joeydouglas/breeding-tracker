@@ -16,10 +16,16 @@ That is two claims, and this file tests both:
   and its own ``load_tracker()`` / ``save_tracker()`` wrapper functions are
   exercised. Nothing here touches a real project dir, Discord, Drive, or git.
 
-The wrappers call ``core.load_tracker(TRACKER_FILE)`` and
-``core.save_tracker(tracker, TRACKER_FILE)`` where ``TRACKER_FILE`` is
-``BREEDING_DIR / 'tracker.json'`` -- so this file is also the proof that the
-external signature (positional args, argument order) is preserved.
+Each wrapper's ``load_tracker``/``save_tracker`` façades now call
+``core.load_tracker_for(CONFIG)`` and ``core.save_tracker_for(tracker,
+CONFIG)`` (NICK-949) rather than the original path-only
+``core.load_tracker(TRACKER_FILE)`` / ``core.save_tracker(tracker,
+TRACKER_FILE)`` -- the config-aware calls are what let ``CONFIG['BACKEND']``
+actually be honoured. The ORIGINAL path-only signature is still preserved
+and tested, just not here: see ``tests/test_backend_selector.py``, which is
+the current proof that ``core.load_tracker(path)``/``core.save_tracker(t,
+path)`` keep working unchanged for any caller that doesn't go through a
+CONFIG dict.
 """
 
 import hashlib
@@ -48,10 +54,16 @@ BREEDING_ROOT = Path.home() / ".hermes" / "breeding"
 # entry and ``load_tracker``/``save_tracker`` façades routed through
 # ``core.*_for(CONFIG)`` so the flip is actually honoured. The
 # "still works" tests below are unchanged and remain the real proof that the
-# markdown behaviour did not move. Pre-NICK-949 wrapper source is NOT
-# recoverable from any backup (see NICK-949 review finding A) -- these hashes
-# are now the only artifact of that prior state, and cannot themselves be
-# used to reconstruct it (a digest is not a preimage).
+# markdown behaviour did not move. Pre-NICK-949 wrapper source was NOT
+# recoverable from any backup (NICK-949 review finding A) -- these hashes
+# were the only artifact of that prior state, and could not themselves be
+# used to reconstruct it (a digest is not a preimage). Going forward this is
+# fixed: ``pre-refactor-backup/wrappers-post-nick949/`` is a git-tracked
+# mirror of the CURRENT wrapper source, and
+# ``test_wrapper_source_matches_the_tracked_mirror`` below fails loudly if a
+# live wrapper drifts from it without the mirror being updated in the same
+# commit -- so the next edit (Task 7.2's real per-project flip) has an actual
+# recoverable baseline, not just a hash.
 WRAPPER_SHA256 = {
     "honey-badger-haze-pheno-hunt":
         "96a91064bdbeb49df0ed8023ea07fd226a7616ba9bf4a6f35c17c383874f3e17",
@@ -118,8 +130,11 @@ def test_wrapper_source_is_byte_identical_to_the_pre_task_baseline(project):
         pytest.skip(f"wrapper for {project} not present")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     assert digest == WRAPPER_SHA256[project], (
-        f"{project}/monitor_breeding_notes.py was modified -- Task 2.1's "
-        "acceptance criteria requires wrapper code to stay untouched"
+        f"{project}/monitor_breeding_notes.py was modified against the "
+        "current baseline -- if this is an intentional wrapper edit (as "
+        "NICK-949 was), re-baseline WRAPPER_SHA256 for this project AND "
+        "update the module docstring/comments above to say so; if it's "
+        "not intentional, revert the wrapper"
     )
 
 
@@ -207,4 +222,41 @@ def test_no_wrapper_run_touched_a_real_project_directory(tmp_path, monkeypatch):
     }
     assert project_md_after == project_md_before, (
         "a sandbox wrapper run modified a real project.md"
+    )
+
+
+# ------------------------------------------- tracked recoverable mirror ---
+
+MIRROR_DIR = Path(__file__).resolve().parent.parent / "pre-refactor-backup" / "wrappers-post-nick949"
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+def test_wrapper_source_matches_the_tracked_mirror(project):
+    """The live wrapper must match its git-tracked mirror byte-for-byte.
+
+    NICK-949 review finding A: wrapper files under ~/.hermes/breeding are not
+    version-controlled, and pre-NICK-949 source proved unrecoverable once the
+    files were edited (a SHA-256 pin only detects drift, it cannot reverse
+    it). This test plus the mirror it checks against are the fix: any wrapper
+    edit from this point on MUST update its mirror copy in the same commit,
+    or this test catches the drift immediately -- turning "no undo" into "the
+    tracked history has every wrapper revision".
+
+    If this test fails because you intentionally edited a wrapper: copy the
+    new wrapper source into MIRROR_DIR and commit both together (and, if the
+    edit also changes wrapper behavior/content, re-baseline WRAPPER_SHA256
+    above with a comment explaining why, per that test's own message).
+    """
+    live_path = _wrapper_path(project)
+    if not live_path.exists():
+        pytest.skip(f"wrapper for {project} not present")
+    mirror_path = MIRROR_DIR / f"{project}_monitor_breeding_notes.py"
+    assert mirror_path.exists(), (
+        f"no tracked mirror for {project} at {mirror_path} -- every live "
+        "wrapper must have one (see this test's docstring)"
+    )
+    assert live_path.read_bytes() == mirror_path.read_bytes(), (
+        f"{project}/monitor_breeding_notes.py has drifted from its tracked "
+        f"mirror at {mirror_path} -- if this edit is intentional, copy the "
+        "new source into the mirror and commit both together"
     )
