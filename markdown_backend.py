@@ -59,7 +59,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from plant_record import CANONICAL_ID_KEY, plant_id_of
+from plant_record import CANONICAL_ID_KEY, ID_KEYS, plant_id_of
 
 _DEFAULT_MARKDOWN_REPO = Path(__file__).resolve().parents[1] / "breeding-markdown"
 
@@ -280,6 +280,22 @@ def save_plant(plant, project_dir) -> None:
                 existing_typed, existing_present, _ALWAYS_PRESENT_PLANT_KEYS
             )
         )
+    # NICK-965 stage-2 review (I1): a plain merged.update(plant) can leave a
+    # file carrying BOTH id spellings if the on-disk file uses one spelling
+    # (say 'id', a Mule-Fuel legacy record) and the caller's `plant` dict uses
+    # the other ('plant_id', e.g. a fresh update built by a config-aware
+    # caller) -- update() layers keys, it doesn't replace them. A file with
+    # both keys is then only ever one edit away from `plant_id_of`'s
+    # "conflicting ids" ValueError if the two spellings ever disagree, and
+    # even while they happen to agree it violates the "records keep whichever
+    # single spelling they arrived with" invariant this whole fix is built
+    # on. Drop every OTHER id key before merging in `plant`'s own -- the
+    # write path picks exactly one spelling, same guarantee `update_plant`
+    # already has for the JSON-roster path.
+    incoming_id_keys = {k for k in ID_KEYS if k in plant}
+    for key in ID_KEYS:
+        if key not in incoming_id_keys:
+            merged.pop(key, None)
     merged.update(plant)
 
     plant_markdown.write_plant(path, merged, schema=plant_schema)

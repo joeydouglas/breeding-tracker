@@ -221,14 +221,42 @@ def test_make_blank_plant_field_set_is_otherwise_unchanged():
 def _sandbox_copy_of_live_project(project, tmp_path):
     """A byte-copy of a real migrated project dir. Copied, not regenerated
     through the backend, so the sandbox carries the migration tool's OWN
-    frontmatter spelling rather than one this test chose."""
+    frontmatter spelling rather than one this test chose.
+
+    NICK-965 stage-2 review (I2): an unfiltered copytree of a live project
+    dir pulls in that project's photo/dashboard/export payload too -- for
+    mule-fuel-x-nana-glue that's ~225 MB per test, times pytest's default
+    retention of the last 3 run dirs, which was enough to exhaust /tmp's
+    disk quota outright (a full-suite run died with
+    'OSError: Disk quota exceeded' / INTERNALERROR, not a clean test
+    failure). This test only ever reads tracker.json, project.md, plants/,
+    and the wrapper -- ignore everything else so the copy is representative
+    of the real corpus's SHAPE without also copying its unrelated bulk.
+    """
     import shutil
 
     source = BREEDING_ROOT / project
     if not (source / "project.md").exists():
         pytest.skip(f"{project} is not migrated to markdown")
     sandbox = tmp_path / project
-    shutil.copytree(source, sandbox)
+    shutil.copytree(
+        source,
+        sandbox,
+        ignore=shutil.ignore_patterns(
+            "cache", "dashboard", "photo_staging", "__pycache__",
+            "*.tar.gz", "*.json", "*.txt", "*.html",
+            "auto_process_breeding.py", "breeding_tools.py",
+            "discord_monitor.py", "fetch_breeding_messages.py",
+            "generate_dashboard.py", "observation_logger.py",
+            "photo_handler.py", "process_recent.py",
+        ),
+    )
+    # tracker.json is deliberately NOT ignored above by name alone (the glob
+    # "*.json" would also catch it) -- restore it explicitly, since several
+    # tests in this file read it as the source of truth.
+    tracker_src = source / "tracker.json"
+    if tracker_src.exists():
+        shutil.copy2(tracker_src, sandbox / "tracker.json")
     return sandbox
 
 
@@ -486,6 +514,56 @@ def test_markdown_backend_rejects_a_conflicting_pair_of_ids(tmp_path):
 def test_save_plant_accepts_the_canonical_key(tmp_path):
     markdown_backend.save_plant({"plant_id": "SB01", "status": "keeper"}, tmp_path)
     assert (tmp_path / "plants" / "SB01.md").is_file()
+
+
+def _frontmatter_lines(plant_file):
+    text = plant_file.read_text(encoding="utf-8")
+    return text.split("---")[1].splitlines()
+
+
+def test_save_plant_merge_never_leaves_both_id_spellings_legacy_then_canonical(tmp_path):
+    """NICK-965 stage-2 review (I1): save_plant's merge is `merged.update(plant)`
+    layered over whatever the file already had -- update() layers keys, it
+    doesn't replace them, so an on-disk 'id'-keyed record (a Mule-Fuel-style
+    legacy write) merged with a fresh 'plant_id'-keyed update used to leave
+    the file holding BOTH spellings. That's not just untidy: plant_id_of()
+    raises 'conflicting ids' the moment the two ever disagree, so a
+    dual-keyed file is one edit away from becoming permanently unloadable.
+    """
+    markdown_backend.save_plant({"id": "MG01", "cross": "Test", "status": "active"}, tmp_path)
+    markdown_backend.save_plant({"plant_id": "MG01", "vigor": "9"}, tmp_path)
+
+    lines = _frontmatter_lines(tmp_path / "plants" / "MG01.md")
+    assert any(line.startswith("plant_id:") for line in lines)
+    assert not any(line.startswith("id:") for line in lines)
+
+
+def test_save_plant_merge_never_leaves_both_id_spellings_canonical_then_legacy(tmp_path):
+    """Same bug, opposite direction: a 'plant_id'-keyed file (the real
+    corpus's own shape) merged with an 'id'-keyed update must end up with
+    exactly 'id:', not both."""
+    markdown_backend.save_plant({"plant_id": "Ltz01", "cross": "Lantz", "status": "active"}, tmp_path)
+    markdown_backend.save_plant({"id": "Ltz01", "vigor": "7"}, tmp_path)
+
+    lines = _frontmatter_lines(tmp_path / "plants" / "Ltz01.md")
+    assert any(line.startswith("id:") for line in lines)
+    assert not any(line.startswith("plant_id:") for line in lines)
+
+
+def test_save_plant_merge_preserves_the_spelling_when_update_omits_the_id(tmp_path):
+    """A partial update that only touches, say, vigor still has to name the
+    plant to find its file -- _plant_id_for_write requires SOME id key on
+    every call -- but the existing spelling must survive untouched when the
+    update's own id key matches what's already on disk (the common case:
+    most observations don't re-declare the ID at all beyond what routes the
+    call)."""
+    markdown_backend.save_plant({"id": "MG02", "cross": "Test", "status": "active"}, tmp_path)
+    markdown_backend.save_plant({"id": "MG02", "vigor": "8"}, tmp_path)
+
+    lines = _frontmatter_lines(tmp_path / "plants" / "MG02.md")
+    assert any(line.startswith("id:") for line in lines)
+    assert not any(line.startswith("plant_id:") for line in lines)
+    assert any(line.startswith("vigor:") for line in lines)
 
 
 def test_duplicate_detection_spans_both_spellings(tmp_path):

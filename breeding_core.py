@@ -27,7 +27,7 @@ from pathlib import Path
 
 import json_backend
 import markdown_backend
-from plant_record import CANONICAL_ID_KEY, LEGACY_ID_KEY, plant_id_of  # noqa: F401
+from plant_record import CANONICAL_ID_KEY, LEGACY_ID_KEY, plant_id_of
 
 TERPENE_KEYWORDS = ['fuel', 'gas', 'citrus', 'fruity', 'sweet', 'earthy', 'pine', 'skunky', 'diesel']
 STRUCTURE_KEYWORDS = ['frosty', 'dense', 'sandy', 'sticky', 'purple', 'tight', 'fox.*tail', 'stretch']
@@ -310,7 +310,8 @@ def update_plant(plant_id, observation, config, photo_count=0):
         #
         # `and plant_id_of(p)` guards the None case: a plant_id of None must
         # never match, or an ID-less record would swallow every observation.
-        if plant_id_of(p) and plant_id_of(p) == plant_id:
+        matched_id = plant_id_of(p)
+        if matched_id and matched_id == plant_id:
             plant = p
             break
 
