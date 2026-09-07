@@ -196,6 +196,17 @@ def test_no_end_to_end_run_touched_a_real_project_directory(tmp_path, monkeypatc
     if not before:
         pytest.skip("no real trackers present")
 
+    # NICK-948: the live project.md files now legitimately EXIST (they were
+    # generated from tracker.json to unblock load_tracker's FileNotFoundError).
+    # The invariant this test defends is "a sandbox run must not MUTATE live
+    # data", so the live project.md is hashed before/after rather than asserted
+    # absent -- an absence check would now fail on correct production state
+    # while a leak that overwrote a real project.md would slip through.
+    project_md_before = {
+        p: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(BREEDING_ROOT.glob("*/project.md"))
+    }
+
     for project in PROJECTS:
         with monkeypatch.context() as ctx:
             sandbox, tracker = _seed_sandbox(project, tmp_path / f"iso-{project}")
@@ -209,8 +220,11 @@ def test_no_end_to_end_run_touched_a_real_project_directory(tmp_path, monkeypatc
         for p in sorted(BREEDING_ROOT.glob("*/tracker.json"))
     }
     assert after == before
-    for project in PROJECTS:
-        assert not (BREEDING_ROOT / project / "project.md").exists()
+    project_md_after = {
+        p: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(BREEDING_ROOT.glob("*/project.md"))
+    }
+    assert project_md_after == project_md_before
 
 
 # --------------------------------- save_plant (update_markdown's backend) ---

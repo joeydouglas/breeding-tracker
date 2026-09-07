@@ -160,6 +160,13 @@ def test_no_wrapper_run_touched_a_real_project_directory(tmp_path, monkeypatch):
     if not before:
         pytest.skip("no real trackers present")
 
+    # NICK-948: live project.md files now legitimately exist -- see the same
+    # note in test_update_plant_end_to_end.py. Assert non-MUTATION, not absence.
+    project_md_before = {
+        p: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(BREEDING_ROOT.glob("*/project.md"))
+    }
+
     for project in PROJECTS:
         sandbox = tmp_path / f"iso-{project}"
         sandbox.mkdir()
@@ -173,7 +180,10 @@ def test_no_wrapper_run_touched_a_real_project_directory(tmp_path, monkeypatch):
         for p in sorted(BREEDING_ROOT.glob("*/tracker.json"))
     }
     assert after == before
-    for project in PROJECTS:
-        assert not (BREEDING_ROOT / project / "project.md").exists(), (
-            f"sandbox run leaked a project.md into the real {project} dir"
-        )
+    project_md_after = {
+        p: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(BREEDING_ROOT.glob("*/project.md"))
+    }
+    assert project_md_after == project_md_before, (
+        "a sandbox wrapper run modified a real project.md"
+    )

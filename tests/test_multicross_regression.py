@@ -709,12 +709,22 @@ def test_the_six_real_project_dirs_are_untouched_by_a_full_replay(replay):
 
 
 def test_no_real_project_dir_gained_markdown_records(replay):
-    """A leaked ``project.md`` in a real dir would be an unrequested,
-    unreviewed migration of live data."""
+    """A replay must never MUTATE a live ``project.md``.
+
+    NICK-948: this previously asserted no live ``project.md`` existed at all --
+    correct while Phase 3 was sandbox-only, but false once the six live files
+    were generated from tracker.json to unblock ``load_tracker``. The
+    ``project.md`` content is covered byte-for-byte by
+    ``test_the_six_real_project_dirs_are_untouched_by_a_full_replay`` above,
+    which diffs every file in each real dir; this test now pins the specific
+    claim that the replay neither created nor rewrote one.
+    """
     safety = replay["_safety"]
     for project in safety["present"]:
-        assert "project.md" not in safety["after"][project], (
-            f"the replay leaked a project.md into the real {project} dir"
+        after = safety["after"][project]
+        before = safety["before"][project]
+        assert after.get("project.md") == before.get("project.md"), (
+            f"the replay created or modified project.md in the real {project} dir"
         )
 
 
