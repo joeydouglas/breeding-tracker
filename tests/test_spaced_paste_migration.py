@@ -291,14 +291,25 @@ def test_the_empty_string_survives_as_an_empty_string_not_as_null(migrated):
         assert "photos_drive_url: null" not in frontmatter, plant_id
 
 
-def test_empty_photo_lists_and_counts_stay_consistent(migrated):
-    """No plant here has photos; `photo_count` must stay 0 and `photos` `[]`
-    rather than being recomputed, normalised or dropped as an empty value."""
+def test_photo_lists_and_counts_are_migrated_consistently(migrated):
+    """`photos` and `photo_count` migrate byte-for-byte from the tracker,
+    whatever their content -- neither recomputed, normalised, nor dropped.
+
+    Until NICK-987, every spaced-paste plant's `photos` was `[]` (the old
+    HTML dashboard generator sourced images from a separate, non-canonical
+    `cache/all_doc_images.json` that was never round-tripped into
+    tracker.json). NICK-987 merged those Google Doc images into
+    tracker.json's `photos` field for real, so the fixed "always `[]`"
+    assertion this test previously made is now false for the live data --
+    correctly so. The invariant this test protects (photos/photo_count
+    survive migration unchanged, in whatever shape the tracker holds them)
+    still holds and is what is asserted now.
+    """
     _, out = migrated
     for plant in tracker_json(SPEC)["plants"]:
         got = _plant(out, plant["id"])
-        assert got["photos"] == plant["photos"] == []
-        assert got["photo_count"] == plant["photo_count"] == 0
+        assert got["photos"] == plant["photos"]
+        assert got["photo_count"] == plant["photo_count"] == len(plant["photos"] or [])
 
 
 # ------------------------------------------------- this project's records ---
