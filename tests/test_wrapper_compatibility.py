@@ -31,19 +31,31 @@ BREEDING_ROOT = Path.home() / ".hermes" / "breeding"
 
 # Baselines captured from the working tree at the start of Task 2.1, BEFORE
 # any production change. Any edit to a wrapper changes these.
+#
+# NICK-949 RE-BASELINE. Task 2.1's acceptance criteria was that its OWN change
+# required no wrapper edit -- and it did not; these hashes went untouched
+# through 2.1, 2.3 and 2.5. NICK-949 is a different, later change with the
+# opposite intent: it adds the per-project ``CONFIG['BACKEND']`` key that Task
+# 7.2's rollback rehearsal flips, and that key has to be written down in each
+# wrapper (an implicit default cannot be flipped, and cannot be read). So each
+# wrapper gained exactly two things -- an explicit ``'BACKEND': 'markdown'``
+# entry and ``load_tracker``/``save_tracker`` façades routed through
+# ``core.*_for(CONFIG)`` so the flip is actually honoured. The
+# "still works" tests below are unchanged and remain the real proof that the
+# markdown behaviour did not move.
 WRAPPER_SHA256 = {
     "honey-badger-haze-pheno-hunt":
-        "c2d385f838b9e899bdffd7e0934e561092c9b03e07d4eb75f787e27270bedeb0",
+        "96a91064bdbeb49df0ed8023ea07fd226a7616ba9bf4a6f35c17c383874f3e17",
     "kibungan-pheno-hunt":
-        "e32b8e29f392ba1a729dcb5087662f8d6068c53ba4119334252b4b9f830de31b",
+        "2768b6fefe7cf3246c7388e4765c5bddc6cc55c5fe6b3b363dc367273de19dc5",
     "lantz":
-        "5b524afb1de604c813db3ca056610a6ea94ddb04841cb8fc49a8b3501bd56a3c",
+        "79c86a0b5c1ada77750cafdb94dbe0da290eef7e22b4d039cb89be5116fe56ac",
     "mule-fuel-x-nana-glue":
-        "f0f179c70fc004d43242a223512f1ae2be94bd57fc8b081574e2d5f2bbace66f",
+        "ac9e7b1521fcea5266e13ab3b648805e97bc7a661898d58e6c6d80acae83c959",
     "paloma-coma":
-        "19576dd2e06a32e1075132acb924805c6aea624f3f375a55610d76a845dabc62",
+        "356b2c29b7973611a85a94fd23cabbe2c9b79ee0a060b813a92f53772a8100da",
     "spaced-paste":
-        "bc5d4c72051ceef1f2f08183d40b69796d17e6c0f3f4b137c794ecced617ab93",
+        "c5fddf7507f115d30da0ed64a9c8b025719e11da9a546f36a8c1692c1a3cfe31",
 }
 
 PROJECTS = sorted(WRAPPER_SHA256)

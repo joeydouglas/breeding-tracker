@@ -25,21 +25,99 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import json_backend
 import markdown_backend
 
 TERPENE_KEYWORDS = ['fuel', 'gas', 'citrus', 'fruity', 'sweet', 'earthy', 'pine', 'skunky', 'diesel']
 STRUCTURE_KEYWORDS = ['frosty', 'dense', 'sandy', 'sticky', 'purple', 'tight', 'fox.*tail', 'stretch']
 
 
-def load_tracker(tracker_file):
-    """Load a project's tracker.
+# ---------------------------------------------------------------------------
+# STORAGE BACKEND SELECTION (NICK-949)
+#
+# Task 2.1 migrated tracker persistence from `tracker.json` to markdown by
+# flipping `load_tracker`/`save_tracker` to call `markdown_backend`
+# UNCONDITIONALLY (commit f2bbca5) -- one global switch shared by all six
+# per-project wrappers. That was the smallest safe migration step, but it
+# omitted the per-project half of the design: Phase 2's rollback plan
+# (Task 7.2) requires flipping ONE project back to JSON while the other five
+# stay on markdown, and no config key existed to express that. This block is
+# that missing piece, added after the fact -- not a new feature, the switch
+# 2.1 should have carried.
+#
+# Both backends implement the same two functions with the same signatures and
+# the same `FileNotFoundError`-when-absent contract, so routing between them
+# is a dict lookup and nothing downstream can tell which one ran.
+# ---------------------------------------------------------------------------
 
-    PHASE 2 / TASK 2.1: the on-disk format is now markdown -- `project.md`
+STORAGE_BACKENDS = {
+    'markdown': markdown_backend,
+    'json': json_backend,
+}
+
+# Absent config key => markdown. Backward compatibility is the whole point:
+# every config built before this task (and every registry entry that says
+# nothing about storage) must keep behaving exactly as it does today.
+DEFAULT_BACKEND = 'markdown'
+
+BACKEND_CONFIG_KEY = 'BACKEND'
+
+
+def backend_name(config=None):
+    """The backend name for a per-project ``config`` dict.
+
+    Returns ``DEFAULT_BACKEND`` when ``config`` is ``None`` or carries no
+    ``BACKEND`` key. Raises ``ValueError`` for a name that is not registered.
+
+    The unknown-name case FAILS LOUD, and deliberately does not case-fold or
+    strip -- the same call ``_validate_registry`` makes about ambiguous
+    routing config. A config saying ``'JSON'`` or ``'sqlite'`` is a typo or a
+    half-finished edit; quietly falling back to markdown would write a
+    rolled-back project's observations into the store nobody is reading.
+    """
+    name = (config or {}).get(BACKEND_CONFIG_KEY) or DEFAULT_BACKEND
+    if name not in STORAGE_BACKENDS:
+        raise ValueError(
+            f"unknown storage backend {name!r} in config[{BACKEND_CONFIG_KEY!r}]; "
+            f"expected one of {sorted(STORAGE_BACKENDS)}"
+        )
+    return name
+
+
+def backend_for(config=None):
+    """The backend MODULE selected by ``config`` (see ``backend_name``)."""
+    return STORAGE_BACKENDS[backend_name(config)]
+
+
+def load_tracker_for(config):
+    """Load a project's tracker through ITS OWN configured backend.
+
+    This is the config-aware entry point; ``load_tracker(tracker_file)``
+    below is the path-only façade that keeps the JSON-era signature.
+    """
+    return backend_for(config).load_tracker(config['TRACKER_FILE'])
+
+
+def save_tracker_for(tracker, config):
+    """Save a project's tracker through ITS OWN configured backend."""
+    backend_for(config).save_tracker(tracker, config['TRACKER_FILE'])
+
+
+def load_tracker(tracker_file):
+    """Load a project's tracker (path-only façade, DEFAULT backend).
+
+    PHASE 2 / TASK 2.1: the default on-disk format is markdown -- `project.md`
     plus `plants/<ID>.md` in `tracker_file`'s parent directory -- not
     `tracker.json`. The SIGNATURE and the returned data shape are unchanged,
     so every per-project `monitor_breeding_notes.py` wrapper keeps calling
     `core.load_tracker(TRACKER_FILE)` with no edit at all. `tracker_file`
     itself is no longer read; only its parent directory is used.
+
+    NICK-949: this signature is deliberately NOT widened with a `config`
+    parameter (it is pinned by `test_tracker_persistence.py` and is the exact
+    JSON-era shape). A caller that needs its project's OWN backend calls
+    `load_tracker_for(config)` instead; this façade always uses
+    `DEFAULT_BACKEND`.
 
     Raises `FileNotFoundError` when the project has not been migrated (no
     `project.md`), matching the JSON era's `open()`.
@@ -51,16 +129,16 @@ def load_tracker(tracker_file):
     unsafe (`save_tracker` would delete the skipped plant's file on the next
     observation).
     """
-    return markdown_backend.load_tracker(tracker_file)
+    return STORAGE_BACKENDS[DEFAULT_BACKEND].load_tracker(tracker_file)
 
 
 def save_tracker(tracker, tracker_file):
-    """Save a project's tracker to markdown (see load_tracker for the format).
+    """Save a project's tracker to the DEFAULT backend (see load_tracker).
 
     Signature, argument order and `None` return are unchanged from the JSON
-    era; only the persistence backend differs.
+    era. Per-project routing lives in `save_tracker_for(tracker, config)`.
     """
-    markdown_backend.save_tracker(tracker, tracker_file)
+    STORAGE_BACKENDS[DEFAULT_BACKEND].save_tracker(tracker, tracker_file)
 
 
 def parse_observation(text):
@@ -141,7 +219,7 @@ def update_plant(plant_id, observation, config, photo_count=0):
     rosters (Mule Fuel x Nana Glue, Lantz, Spaced Paste), where a missing
     plant ID is an error, not a new record.
     """
-    tracker = load_tracker(config['TRACKER_FILE'])
+    tracker = load_tracker_for(config)
 
     plant = None
     for p in tracker['plants']:
@@ -186,7 +264,9 @@ def update_plant(plant_id, observation, config, photo_count=0):
     # save_tracker() writes plants/<ID>.md itself now (see update_markdown's
     # docstring for why the old, separate update_markdown() call that used to
     # sit here would immediately overwrite what save_tracker just wrote).
-    save_tracker(tracker, config['TRACKER_FILE'])
+    # NICK-949: routed through this project's OWN backend, so a project rolled
+    # back to JSON is loaded from and saved to tracker.json, not markdown.
+    save_tracker_for(tracker, config)
 
     subprocess.run(['python3', str(config['BREEDING_DIR'] / 'generate_dashboard.py')],
                     cwd=config['BREEDING_DIR'], capture_output=True)
@@ -701,7 +781,7 @@ def config_for_project(entry):
     Produces exactly the dict shape ``update_plant`` and ``process_message``
     already document and the six wrappers already hand-build -- BREEDING_DIR,
     TRACKER_FILE, GITHUB_REPO, DISABLE_GITHUB_PUSH, CROSS_NAME, AUTO_CREATE,
-    plus either PLANT_ID_PATTERN + PLANT_ID_PREFIX (one prefix) or
+    BACKEND, plus either PLANT_ID_PATTERN + PLANT_ID_PREFIX (one prefix) or
     PLANT_ID_REGISTRY (two or more, as Kibungan's PK/PL). Nothing downstream
     can tell a registry-built config from a wrapper-built one.
 
@@ -721,6 +801,11 @@ def config_for_project(entry):
         'DISABLE_GITHUB_PUSH': os.environ.get('BREEDING_DISABLE_PUSH') == '1',
         'CROSS_NAME': entry.get('cross_name', entry['slug']),
         'AUTO_CREATE': bool(entry.get('auto_create')),
+        # NICK-949: storage backend, per project. Absent from the registry
+        # entry => markdown, the current behaviour for every live project.
+        # Validated here rather than at first read so a bad name surfaces when
+        # the config is built, not mid-ingestion.
+        'BACKEND': backend_name({'BACKEND': entry.get('backend')}),
     }
 
     compiled = _compile_prefixes(entry)
