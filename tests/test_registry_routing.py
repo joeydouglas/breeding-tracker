@@ -92,6 +92,8 @@ def _project_entry(slug, breeding_dir, prefixes, **kw):
         "auto_create": kw.get("auto_create", False),
         "plant_id_prefixes": prefixes,
     }
+    if "backend" in kw:
+        entry["backend"] = kw["backend"]
     return entry
 
 
@@ -319,6 +321,23 @@ def test_duplicate_prefix_across_projects_is_rejected(meta_repo, tmp_path):
     with pytest.raises(ValueError) as exc:
         core.load_registry()
     assert "DM" in str(exc.value)
+
+
+def test_unknown_backend_in_registry_is_rejected_at_load_time(meta_repo, tmp_path):
+    """NICK-949 stage-2 review, round 3 (I2): an invalid ``backend`` must
+    fail loud at ``load_registry()`` time, naming the project -- the same
+    guarantee every other required/validated field in this registry already
+    gets (missing slug, missing breeding_dir, duplicate/ambiguous prefix).
+    Previously this was only checked inside ``config_for_project`` per
+    message, where the one-key config `backend_name()` was called with had
+    no CROSS_NAME to report -- so the error said '<unknown project>' instead
+    of naming the actual malformed entry."""
+    pfx = [{"prefix": "ZZ", "pattern": r"\bZZ(\d{1,2})\b"}]
+    _write_registry(meta_repo, [
+        _project_entry("bad-backend-project", tmp_path / "bbp", pfx, backend="sqlite"),
+    ])
+    with pytest.raises(ValueError, match=r"bad-backend-project.*sqlite"):
+        core.load_registry()
 
 
 def test_registry_entry_raises_for_unknown_slug():

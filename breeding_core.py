@@ -114,10 +114,19 @@ def load_tracker(tracker_file):
 
     PHASE 2 / TASK 2.1: the default on-disk format is markdown -- `project.md`
     plus `plants/<ID>.md` in `tracker_file`'s parent directory -- not
-    `tracker.json`. The SIGNATURE and the returned data shape are unchanged,
-    so every per-project `monitor_breeding_notes.py` wrapper keeps calling
-    `core.load_tracker(TRACKER_FILE)` with no edit at all. `tracker_file`
-    itself is no longer read; only its parent directory is used.
+    `tracker.json`. The SIGNATURE and the returned data shape are unchanged.
+    At the time of Task 2.1 itself, every wrapper called this exact function
+    with no edit at all -- that was 2.1's whole acceptance criterion.
+    `tracker_file` itself is no longer read; only its parent directory is
+    used.
+
+    NICK-949 (LATER change -- see below): wrappers no longer call this
+    function directly. They now call `load_tracker_for(config)`, which reads
+    the project's own `CONFIG['BACKEND']` (added in that same change) and
+    dispatches to whichever backend that project is on. This path-only
+    façade itself is UNCHANGED and still calls `DEFAULT_BACKEND` -- it is
+    still tested and still correct for any caller that isn't config-aware --
+    it is simply no longer what the six live wrappers use.
 
     NICK-949: this signature is deliberately NOT widened with a `config`
     parameter (it is pinned by `test_tracker_persistence.py` and is the exact
@@ -722,6 +731,20 @@ def _validate_registry(data, path):
         # to the breeding root; see ``_validated_breeding_dir``.
         _validated_breeding_dir(entry.get('breeding_dir'), slug, path)
 
+        # NICK-949 stage-2 review (round 3): validate ``backend`` here too,
+        # at registry-load time, matching every other per-entry check in this
+        # function -- rather than only at config_for_project() time, which
+        # runs per-message and is easy to skip in ad-hoc scripts that build a
+        # config a different way. Same fail-loud-and-name-the-project pattern
+        # as the rest of this function.
+        backend = entry.get('backend')
+        if backend is not None and backend not in STORAGE_BACKENDS:
+            raise ValueError(
+                f"{path}: project {slug!r} has unknown backend {backend!r}; "
+                f"expected one of {sorted(STORAGE_BACKENDS)} or omit the key "
+                "for the default (markdown)"
+            )
+
         # Prefix uniqueness is case-INSENSITIVE, because matching is: patterns
         # compile with re.IGNORECASE, so 'sp' and 'SP' are the same prefix and
         # a registry declaring both would route one message to two crosses.
@@ -810,8 +833,14 @@ def config_for_project(entry):
         # NICK-949: storage backend, per project. Absent from the registry
         # entry => markdown, the current behaviour for every live project.
         # Validated here rather than at first read so a bad name surfaces when
-        # the config is built, not mid-ingestion.
-        'BACKEND': backend_name({'BACKEND': entry.get('backend')}),
+        # the config is built, not mid-ingestion. Pass CROSS_NAME/slug through
+        # so an invalid registry entry's error names the actual project, not
+        # '<unknown project>' -- entry['slug'] is always present (checked by
+        # _validate_registry before config_for_project is ever called).
+        'BACKEND': backend_name({
+            'BACKEND': entry.get('backend'),
+            'CROSS_NAME': entry.get('cross_name', entry['slug']),
+        }),
     }
 
     compiled = _compile_prefixes(entry)

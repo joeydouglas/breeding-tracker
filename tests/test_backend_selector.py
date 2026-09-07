@@ -105,6 +105,27 @@ def test_unknown_backend_fails_loud(tmp_path):
     assert 'sqlite' in str(exc.value)
 
 
+def test_unknown_backend_error_names_the_project(tmp_path):
+    """NICK-949 stage-2 review I2: an unqualified 'unknown backend' error
+    across six near-identical wrappers leaves the reader to go find which
+    project it was about. The message must name it -- and this must be a
+    real `match=` assertion, not just 'a ValueError was raised', or a future
+    edit can silently drop the project name again (as happened once already:
+    the CROSS_NAME wiring was added without a test, and a downstream config
+    builder that didn't set CROSS_NAME went unnoticed)."""
+    with pytest.raises(ValueError, match=r"Sandbox Cross"):
+        core.backend_name(_config(tmp_path, 'sqlite'))
+
+
+def test_unknown_backend_error_falls_back_to_tracker_file_without_cross_name():
+    """A config with no CROSS_NAME at all (not the shape wrappers build, but
+    not disallowed either) must still name *something* locatable -- the
+    tracker path -- rather than silently omitting project identification."""
+    config = {'BACKEND': 'sqlite', 'TRACKER_FILE': Path('/tmp/nope/tracker.json')}
+    with pytest.raises(ValueError, match=r"nope/tracker\.json"):
+        core.backend_name(config)
+
+
 def test_unknown_backend_fails_loud_on_load_and_save(tmp_path, small_tracker):
     config = _config(tmp_path, 'postgres')
     with pytest.raises(ValueError):
