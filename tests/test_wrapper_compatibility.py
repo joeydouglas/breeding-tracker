@@ -1,13 +1,16 @@
-"""Task 2.1 acceptance criteria: the six per-project wrappers are UNMODIFIED
-and still work against the new markdown backend.
+"""Task 2.1 acceptance criteria: the six per-project wrappers matched a pinned
+SHA-256 baseline and worked against the new markdown backend.
 
 The plan's acceptance criteria for Task 2.1 is precisely: *existing wrapper
 code is NOT modified and still works against the new backend in a sandbox*.
 That is two claims, and this file tests both:
 
-* **Not modified** -- each wrapper's SHA-256 is pinned to the value it had
-  before Task 2.1 began. If anyone edits a wrapper to accommodate the new
-  backend, these tests fail and the acceptance criteria is provably violated.
+* **Not modified (Task 2.1's own change)** -- each wrapper's SHA-256 is
+  pinned. Task 2.1 itself made no wrapper edits and these hashes proved it.
+  NICK-949 (see the re-baseline note below) is a LATER, deliberate wrapper
+  edit for a different reason -- the pin's job from that point on is drift
+  detection against the NEW baseline, not a claim that wrappers have never
+  changed since Task 2.1.
 * **Still works** -- each wrapper is imported verbatim from its real project
   directory, with ``BREEDING_DIR`` pointed at a pytest ``tmp_path`` sandbox,
   and its own ``load_tracker()`` / ``save_tracker()`` wrapper functions are
@@ -29,8 +32,11 @@ import pytest
 
 BREEDING_ROOT = Path.home() / ".hermes" / "breeding"
 
-# Baselines captured from the working tree at the start of Task 2.1, BEFORE
-# any production change. Any edit to a wrapper changes these.
+# Baselines ORIGINALLY captured from the working tree at the start of Task
+# 2.1, before any production change, and RE-BASELINED by NICK-949 below (see
+# that comment for why). These are NOT a "wrappers have never changed since
+# 2.1" claim -- read the NICK-949 note immediately below for the current
+# status. Any edit to a wrapper beyond NICK-949's own changes fails these.
 #
 # NICK-949 RE-BASELINE. Task 2.1's acceptance criteria was that its OWN change
 # required no wrapper edit -- and it did not; these hashes went untouched
@@ -42,7 +48,10 @@ BREEDING_ROOT = Path.home() / ".hermes" / "breeding"
 # entry and ``load_tracker``/``save_tracker`` façades routed through
 # ``core.*_for(CONFIG)`` so the flip is actually honoured. The
 # "still works" tests below are unchanged and remain the real proof that the
-# markdown behaviour did not move.
+# markdown behaviour did not move. Pre-NICK-949 wrapper source is NOT
+# recoverable from any backup (see NICK-949 review finding A) -- these hashes
+# are now the only artifact of that prior state, and cannot themselves be
+# used to reconstruct it (a digest is not a preimage).
 WRAPPER_SHA256 = {
     "honey-badger-haze-pheno-hunt":
         "96a91064bdbeb49df0ed8023ea07fd226a7616ba9bf4a6f35c17c383874f3e17",
