@@ -66,17 +66,17 @@ BREEDING_ROOT = Path.home() / ".hermes" / "breeding"
 # recoverable baseline, not just a hash.
 WRAPPER_SHA256 = {
     "honey-badger-haze-pheno-hunt":
-        "96a91064bdbeb49df0ed8023ea07fd226a7616ba9bf4a6f35c17c383874f3e17",
+        "29a8a894eb592eb35bf9a6a00abcb4f3cd66977b49886c5fe768465492a8a515",
     "kibungan-pheno-hunt":
         "2768b6fefe7cf3246c7388e4765c5bddc6cc55c5fe6b3b363dc367273de19dc5",
     "lantz":
-        "79c86a0b5c1ada77750cafdb94dbe0da290eef7e22b4d039cb89be5116fe56ac",
+        "4a2daaf80db241b0755dc8241f6783303ca46071554a9989a16ac40cb42c3b32",
     "mule-fuel-x-nana-glue":
-        "ac9e7b1521fcea5266e13ab3b648805e97bc7a661898d58e6c6d80acae83c959",
+        "f85d193137e6d3cb5588e495943beb83f297b37dfb0fff88796bcc233b61c4f3",
     "paloma-coma":
-        "356b2c29b7973611a85a94fd23cabbe2c9b79ee0a060b813a92f53772a8100da",
+        "d45b51f592ea8170a64103433dc9878ac8cb5981dd9eaf94e72d2ccdc9b2aa47",
     "spaced-paste":
-        "c5fddf7507f115d30da0ed64a9c8b025719e11da9a546f36a8c1692c1a3cfe31",
+        "4b5afccc8c58b7af61c96b4a3fd6a932f95583f42b8305ffade87a68bc5a5933",
 }
 
 PROJECTS = sorted(WRAPPER_SHA256)

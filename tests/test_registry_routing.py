@@ -606,6 +606,12 @@ def test_acceptance_new_project_config_drives_a_real_ingestion(
 
 @pytest.mark.parametrize("project", PROJECTS)
 def test_task_2_5_did_not_touch_any_real_wrapper(project):
+    """Re-checks the SAME WRAPPER_SHA256 pin as
+    test_wrapper_compatibility.py's own drift guard (imported above). Task
+    2.5 itself made no wrapper edits; NICK-949 and NICK-924 are LATER,
+    deliberate edits that re-baseline WRAPPER_SHA256 (see that dict's
+    comment) -- this test's job is drift detection against the CURRENT
+    baseline, not a standing claim that wrappers never change."""
     path = BREEDING_ROOT / project / "monitor_breeding_notes.py"
     if not path.exists():
         pytest.skip(f"wrapper for {project} not present")

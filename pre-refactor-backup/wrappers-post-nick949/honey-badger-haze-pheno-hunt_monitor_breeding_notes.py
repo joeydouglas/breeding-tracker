@@ -32,10 +32,19 @@ TRACKER_FILE = BREEDING_DIR / 'tracker.json'
 DISABLE_GITHUB_PUSH = os.environ.get('BREEDING_DISABLE_PUSH') == '1'
 GITHUB_REPO = os.environ.get('BREEDING_GITHUB_REPO', 'joeydouglas/honey-badger-haze-pheno-hunt')
 
-# Plant ID pattern - tolerant of voice-transcription artifacts:
-# "HBH27", "HBH 27", "hbh-27", "HBH5" (single digit, zero-padded) all match.
-# 3+ digit runs (e.g. "HBH150") are correctly rejected by the trailing \b.
-PLANT_ID_PATTERN = r'\bHBH[\s\-]?(\d{1,2})\b'
+# Plant ID pattern - tolerant of voice-transcription artifacts and now
+# (NICK-924) 3-digit IDs, '#' separators, and leading zeros -- widened
+# to match the gateway's routing decision, see the pattern's own
+# comment below for why.
+# NICK-924: widened to match the gateway's live, more permissive
+# PLANT_ID_REGISTRY pattern (breeding-ingest/breeding_tracker/
+# discord_ingest.py) -- handles '#' separator, leading zeros, and
+# 3-digit IDs that the old narrower pattern silently dropped even
+# though the gateway had already routed the message here (found
+# investigating NICK-924's routing-equivalence acceptance criterion).
+# Case-insensitivity is applied by the caller (extract_plant_ids_single
+# always passes re.IGNORECASE), matching the gateway's own (?i).
+PLANT_ID_PATTERN = r'(?i)(?<![A-Z0-9])HBH\s*[-#]?\s*0*(\d{1,3})(?!\d)'
 PLANT_ID_PREFIX = 'HBH'
 
 CONFIG = {
