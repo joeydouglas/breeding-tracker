@@ -49,6 +49,7 @@ import pytest
 from helpers_migration import (  # noqa: F401  (fixture re-export)
     PLANT_TEMPLATE,
     PROJECT_TEMPLATE,
+    expected_plant_record,
     migrate_project,
     no_side_effects,
     registry_entry,
@@ -289,17 +290,26 @@ def test_ltz01_is_the_only_record_in_the_corpus_with_no_defaulted_fields(migrate
 
     schema = _plant_schema()
     required = {f for f in schema if f != PLANT_BODY_FIELD}
+    # NICK-966: the predicate compares source keys against the SCHEMA's key
+    # set, and the schema now spells the ID `plant_id` while the trackers
+    # still spell it `id`. Apply the migration's own rename to each source
+    # record first, or `required <= set(p)` is false for every plant in every
+    # project and the assertion passes vacuously.
     for spec in PROJECT_SPECS:
         if spec.slug == SPEC.slug or not spec.tracker.exists():
             continue
         zero_default = [
-            p["id"] for p in tracker_json(spec)["plants"] if required <= set(p)
+            p["id"]
+            for p in tracker_json(spec)["plants"]
+            if required <= set(expected_plant_record(p))
         ]
         assert zero_default == [], (
             f"{spec.slug} also has zero-default records: {zero_default}"
         )
     assert [
-        p["id"] for p in tracker_json(SPEC)["plants"] if required <= set(p)
+        p["id"]
+        for p in tracker_json(SPEC)["plants"]
+        if required <= set(expected_plant_record(p))
     ] == [CORRECTION_CARRIER]
 
     source = {p["id"]: p for p in tracker_json(SPEC)["plants"]}
@@ -351,11 +361,14 @@ def test_plant_filenames_and_ids_survive_both_case_normalisations(migrated):
     for plant_id in EXPECTED_IDS:
         assert plant_id != plant_id.upper() and plant_id != plant_id.lower()
         got = _plant(out, plant_id)
-        assert got["id"] == plant_id
-        assert got["id"] != plant_id.upper()
-        assert got["id"] != plant_id.lower()
+        # NICK-966: the migrated file's ID key is `plant_id`, not `id`.
+        assert got["plant_id"] == plant_id
+        assert got["plant_id"] != plant_id.upper()
+        assert got["plant_id"] != plant_id.lower()
         assert re.search(
-            rf"^id: ['\"]?{plant_id}['\"]?$", _frontmatter(out, plant_id), re.M
+            rf"^plant_id: ['\"]?{plant_id}['\"]?$",
+            _frontmatter(out, plant_id),
+            re.M,
         ), plant_id
 
 

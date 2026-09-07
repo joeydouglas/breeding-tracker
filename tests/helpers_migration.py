@@ -14,7 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from tracker_migration import migrate_tracker
+from tracker_migration import (
+    CANONICAL_PLANT_ID_KEY,
+    SOURCE_PLANT_ID_KEY,
+    migrate_tracker,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 PROJECT_TEMPLATE = REPO / "templates" / "project-template.md"
@@ -23,6 +27,30 @@ PLANT_TEMPLATE = REPO / "templates" / "plant-template.md"
 
 def tracker_json(spec):
     return json.loads(spec.tracker.read_text(encoding="utf-8"))
+
+
+def expected_plant_record(plant):
+    """A source ``tracker.json`` plant as the migration is expected to emit it.
+
+    NICK-966 renamed the markdown corpus's ID field from ``id`` (still the
+    tracker's own native spelling, and ``json_backend``'s) to the canonical
+    ``plant_id``. Every "does the migrated file still carry every source
+    field" assertion therefore has to compare against the RENAMED record, not
+    the raw one -- otherwise ``id`` reads as lost on every plant.
+
+    Defined once here, and derived from ``tracker_migration``'s own two
+    constants rather than from literals, so a test cannot drift from the
+    migration about which spelling lives on which side.
+    """
+    record = dict(plant)
+    if SOURCE_PLANT_ID_KEY in record:
+        record[CANONICAL_PLANT_ID_KEY] = record.pop(SOURCE_PLANT_ID_KEY)
+    return record
+
+
+def plant_id_of_source(plant):
+    """The ID of a source tracker record, under the tracker's own spelling."""
+    return plant[SOURCE_PLANT_ID_KEY]
 
 
 def registry_entry(spec):

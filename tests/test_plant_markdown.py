@@ -41,7 +41,7 @@ def schema():
 @pytest.fixture()
 def full_plant():
     return {
-        "id": "HBH01",
+        "plant_id": "HBH01",
         "cross": "Honey Badger Haze",
         "status": "culled",
         "sex": None,
@@ -79,8 +79,12 @@ class TestLoadSchema:
         assert schema["vigor"]["default"] is None
         assert "vigor" in schema["vigor"]["description"].lower()
 
-    def test_id_is_declared_string(self, schema):
-        assert schema["id"]["type"] == "string"
+    def test_plant_id_is_declared_string(self, schema):
+        assert schema["plant_id"]["type"] == "string"
+
+    def test_legacy_id_key_is_no_longer_declared(self, schema):
+        """NICK-966: both spellings in the schema would emit both keys."""
+        assert "id" not in schema
 
     def test_observation_log_is_body_typed(self, schema):
         assert schema["observation_log"]["type"] == "body"
@@ -147,7 +151,7 @@ class TestOptionalAndEdgeCases:
         self, tmp_path, schema
     ):
         p = tmp_path / "Ltz07.md"
-        write_plant(p, {"id": "Ltz07", "cross": "Lantz"}, schema=schema)
+        write_plant(p, {"plant_id": "Ltz07", "cross": "Lantz"}, schema=schema)
         got = read_plant(p, schema=schema)
         assert got["vigor"] is None
         assert got["photos"] == []
@@ -188,7 +192,7 @@ class TestOptionalAndEdgeCases:
 
     def test_null_false_zero_empty_defaults_preserved(self, tmp_path, schema):
         p = tmp_path / "n.md"
-        data = {"id": "X1", "photo_count": 0, "vigor": "", "selection_notes": "", "sex": None}
+        data = {"plant_id": "X1", "photo_count": 0, "vigor": "", "selection_notes": "", "sex": None}
         write_plant(p, data, schema=schema)
         got = read_plant(p, schema=schema)
         assert got["photo_count"] == 0
@@ -198,7 +202,7 @@ class TestOptionalAndEdgeCases:
 
     def test_unknown_extra_field_is_preserved(self, tmp_path, schema):
         p = tmp_path / "x.md"
-        write_plant(p, {"id": "X1", "future_field": "keep me"}, schema=schema)
+        write_plant(p, {"plant_id": "X1", "future_field": "keep me"}, schema=schema)
         assert read_plant(p, schema=schema)["future_field"] == "keep me"
 
     def test_read_missing_file_raises(self, tmp_path, schema):
@@ -232,32 +236,32 @@ class TestBodyRoundTrip:
 
     def test_hand_written_formatting_survives_exactly(self, tmp_path, schema):
         p = tmp_path / "b.md"
-        write_plant(p, {"id": "B1", "observation_log": self.HAND_EDITED}, schema=schema)
+        write_plant(p, {"plant_id": "B1", "observation_log": self.HAND_EDITED}, schema=schema)
         assert read_plant(p, schema=schema)["observation_log"] == self.HAND_EDITED
 
     def test_body_containing_frontmatter_delimiter_survives(self, tmp_path, schema):
         body = "before\n---\nafter a bare delimiter line\n"
         p = tmp_path / "d.md"
-        write_plant(p, {"id": "D1", "observation_log": body}, schema=schema)
+        write_plant(p, {"plant_id": "D1", "observation_log": body}, schema=schema)
         assert read_plant(p, schema=schema)["observation_log"] == body
 
     def test_body_with_crlf_and_tabs_survives(self, tmp_path, schema):
         body = "line one\twith tab\nline two  \n"
         p = tmp_path / "t.md"
-        write_plant(p, {"id": "T1", "observation_log": body}, schema=schema)
+        write_plant(p, {"plant_id": "T1", "observation_log": body}, schema=schema)
         assert read_plant(p, schema=schema)["observation_log"] == body
 
     def test_manually_authored_file_body_read_verbatim(self, tmp_path, schema):
         p = tmp_path / "m.md"
         p.write_text(
-            "---\nid: M1\n---\n" + self.HAND_EDITED, encoding="utf-8"
+            "---\nplant_id: M1\n---\n" + self.HAND_EDITED, encoding="utf-8"
         )
         assert read_plant(p, schema=schema)["observation_log"] == self.HAND_EDITED
 
     def test_body_is_not_yaml_parsed(self, tmp_path, schema):
         body = "vigor: 9\nstatus: keeper\n"
         p = tmp_path / "y.md"
-        write_plant(p, {"id": "Y1", "vigor": "strong", "observation_log": body}, schema=schema)
+        write_plant(p, {"plant_id": "Y1", "vigor": "strong", "observation_log": body}, schema=schema)
         got = read_plant(p, schema=schema)
         assert got["vigor"] == "strong"
         assert got["observation_log"] == body
@@ -287,8 +291,8 @@ class TestYamlTypeCoercion:
         self, tmp_path, schema, raw, expected
     ):
         p = tmp_path / "c.md"
-        p.write_text(f"---\nid: {raw}\n---\n", encoding="utf-8")
-        assert read_plant(p, schema=schema)["id"] == expected
+        p.write_text(f"---\nplant_id: {raw}\n---\n", encoding="utf-8")
+        assert read_plant(p, schema=schema)["plant_id"] == expected
 
     @pytest.mark.parametrize("raw", ["null", "~", ""])
     def test_bare_null_scalars_are_none_not_the_literal_text(
@@ -297,25 +301,25 @@ class TestYamlTypeCoercion:
         """A bare `null`/`~`/empty value means null - that is how write_plant
         serialises None, so it must read back as None for round-tripping."""
         p = tmp_path / "cn.md"
-        p.write_text(f"---\nid: A1\nsex: {raw}\n---\n", encoding="utf-8")
+        p.write_text(f"---\nplant_id: A1\nsex: {raw}\n---\n", encoding="utf-8")
         assert read_plant(p, schema=schema)["sex"] is None
 
     @pytest.mark.parametrize("raw", ["null", "~", "true", "07"])
     def test_quoted_scalars_always_stay_strings(self, tmp_path, schema, raw):
         p = tmp_path / "cq.md"
-        p.write_text(f'---\nid: A1\nsex: "{raw}"\n---\n', encoding="utf-8")
+        p.write_text(f'---\nplant_id: A1\nsex: "{raw}"\n---\n', encoding="utf-8")
         assert read_plant(p, schema=schema)["sex"] == raw
 
     def test_quoted_null_stays_string_but_bare_empty_is_none(self, tmp_path, schema):
         p = tmp_path / "c2.md"
-        p.write_text("---\nid: A1\nsex:\n---\n", encoding="utf-8")
+        p.write_text("---\nplant_id: A1\nsex:\n---\n", encoding="utf-8")
         assert read_plant(p, schema=schema)["sex"] is None
 
     def test_integer_field_stays_int(self, tmp_path):
-        int_schema = {"id": {"type": "string", "default": None, "description": "id"},
+        int_schema = {"plant_id": {"type": "string", "default": None, "description": "plant_id"},
                       "count": {"type": "integer", "default": None, "description": "a synthetic integer field for coercion testing (real schema has no integer fields)"}}
         p = tmp_path / "i.md"
-        p.write_text("---\nid: A1\ncount: 8\n---\n", encoding="utf-8")
+        p.write_text("---\nplant_id: A1\ncount: 8\n---\n", encoding="utf-8")
         got = read_plant(p, schema=int_schema)
         assert got["count"] == 8
         assert isinstance(got["count"], int) and not isinstance(got["count"], bool)
@@ -323,37 +327,37 @@ class TestYamlTypeCoercion:
     def test_integer_field_given_string_digits_is_coerced_to_int(
         self, tmp_path
     ):
-        int_schema = {"id": {"type": "string", "default": None, "description": "id"},
+        int_schema = {"plant_id": {"type": "string", "default": None, "description": "plant_id"},
                       "count": {"type": "integer", "default": None, "description": "synthetic"}}
         p = tmp_path / "i2.md"
-        p.write_text('---\nid: A1\ncount: "8"\n---\n', encoding="utf-8")
+        p.write_text('---\nplant_id: A1\ncount: "8"\n---\n', encoding="utf-8")
         assert read_plant(p, schema=int_schema)["count"] == 8
 
     def test_integer_field_given_non_numeric_raises(self, tmp_path):
-        int_schema = {"id": {"type": "string", "default": None, "description": "id"},
+        int_schema = {"plant_id": {"type": "string", "default": None, "description": "plant_id"},
                       "count": {"type": "integer", "default": None, "description": "synthetic"}}
         p = tmp_path / "i3.md"
-        p.write_text("---\nid: A1\ncount: very good\n---\n", encoding="utf-8")
+        p.write_text("---\nplant_id: A1\ncount: very good\n---\n", encoding="utf-8")
         with pytest.raises(SchemaTypeError):
             read_plant(p, schema=int_schema)
 
     def test_list_field_given_scalar_raises(self, tmp_path, schema):
         p = tmp_path / "l.md"
-        p.write_text("---\nid: A1\nphotos: nope\n---\n", encoding="utf-8")
+        p.write_text("---\nplant_id: A1\nphotos: nope\n---\n", encoding="utf-8")
         with pytest.raises(SchemaTypeError):
             read_plant(p, schema=schema)
 
     def test_string_field_given_mapping_raises(self, tmp_path, schema):
         p = tmp_path / "s.md"
-        p.write_text("---\nid:\n  a: 1\n---\n", encoding="utf-8")
+        p.write_text("---\nplant_id:\n  a: 1\n---\n", encoding="utf-8")
         with pytest.raises(SchemaTypeError):
             read_plant(p, schema=schema)
 
     def test_write_read_of_stringy_id_is_stable(self, tmp_path, schema):
         p = tmp_path / "w.md"
-        write_plant(p, {"id": "07", "status": "true"}, schema=schema)
+        write_plant(p, {"plant_id": "07", "status": "true"}, schema=schema)
         got = read_plant(p, schema=schema)
-        assert got["id"] == "07"
+        assert got["plant_id"] == "07"
         assert got["status"] == "true"
 
     def test_readback_types_are_json_compatible(self, tmp_path, full_plant, schema):
@@ -366,7 +370,7 @@ class TestYamlTypeCoercion:
 
     def test_no_schema_still_reads_without_coercion_errors(self, tmp_path):
         p = tmp_path / "ns.md"
-        p.write_text("---\nid: A1\nvigor: strong\n---\nbody\n", encoding="utf-8")
+        p.write_text("---\nplant_id: A1\nvigor: strong\n---\nbody\n", encoding="utf-8")
         got = read_plant(p)
         assert got["vigor"] == "strong"
 
@@ -383,13 +387,13 @@ class TestMalformedInput:
 
     def test_unterminated_frontmatter_rejected(self, tmp_path, schema):
         p = tmp_path / "bad2.md"
-        p.write_text("---\nid: A1\nstatus: active\n", encoding="utf-8")
+        p.write_text("---\nplant_id: A1\nstatus: active\n", encoding="utf-8")
         with pytest.raises(MalformedFrontmatterError):
             read_plant(p, schema=schema)
 
     def test_leading_blank_line_before_delimiter_rejected(self, tmp_path, schema):
         p = tmp_path / "bad3.md"
-        p.write_text("\n---\nid: A1\n---\n", encoding="utf-8")
+        p.write_text("\n---\nplant_id: A1\n---\n", encoding="utf-8")
         with pytest.raises(MalformedFrontmatterError):
             read_plant(p, schema=schema)
 
@@ -407,20 +411,20 @@ class TestMalformedInput:
 
     def test_invalid_yaml_rejected(self, tmp_path, schema):
         p = tmp_path / "bad6.md"
-        p.write_text("---\nid: [unclosed\n---\n", encoding="utf-8")
+        p.write_text("---\nplant_id: [unclosed\n---\n", encoding="utf-8")
         with pytest.raises(MalformedFrontmatterError):
             read_plant(p, schema=schema)
 
     def test_duplicate_keys_rejected(self, tmp_path, schema):
         p = tmp_path / "dup.md"
-        p.write_text("---\nid: A1\nvigor: 8\nvigor: 9\n---\n", encoding="utf-8")
+        p.write_text("---\nplant_id: A1\nvigor: 8\nvigor: 9\n---\n", encoding="utf-8")
         with pytest.raises(DuplicateKeyError):
             read_plant(p, schema=schema)
 
     def test_duplicate_keys_in_nested_mapping_rejected(self, tmp_path, schema):
         p = tmp_path / "dup2.md"
         p.write_text(
-            "---\nid: A1\nphotos:\n  - filename: a.jpg\n    filename: b.jpg\n---\n",
+            "---\nplant_id: A1\nphotos:\n  - filename: a.jpg\n    filename: b.jpg\n---\n",
             encoding="utf-8",
         )
         with pytest.raises(DuplicateKeyError):
@@ -429,7 +433,7 @@ class TestMalformedInput:
     def test_yaml_anchors_and_aliases_rejected(self, tmp_path, schema):
         p = tmp_path / "anchor.md"
         p.write_text(
-            "---\nid: A1\nstructure: &a big\nissues: *a\n---\n", encoding="utf-8"
+            "---\nplant_id: A1\nstructure: &a big\nissues: *a\n---\n", encoding="utf-8"
         )
         with pytest.raises(UnsafeYamlError):
             read_plant(p, schema=schema)
@@ -452,7 +456,7 @@ class TestMalformedInput:
     def test_python_object_tag_rejected(self, tmp_path, schema):
         p = tmp_path / "tag.md"
         p.write_text(
-            "---\nid: A1\nissues: !!python/object/apply:os.system ['echo pwned']\n---\n",
+            "---\nplant_id: A1\nissues: !!python/object/apply:os.system ['echo pwned']\n---\n",
             encoding="utf-8",
         )
         with pytest.raises(PlantMarkdownError):
@@ -461,7 +465,7 @@ class TestMalformedInput:
     def test_oversized_file_rejected(self, tmp_path, schema):
         p = tmp_path / "big.md"
         p.write_text(
-            "---\nid: A1\nissues: " + ("x" * (3 * 1024 * 1024)) + "\n---\n",
+            "---\nplant_id: A1\nissues: " + ("x" * (3 * 1024 * 1024)) + "\n---\n",
             encoding="utf-8",
         )
         with pytest.raises(UnsafeYamlError):
@@ -469,7 +473,7 @@ class TestMalformedInput:
 
     def test_deeply_nested_structure_rejected(self, tmp_path, schema):
         p = tmp_path / "deep.md"
-        p.write_text("---\nid: A1\nphotos: " + "[" * 200 + "]" * 200 + "\n---\n",
+        p.write_text("---\nplant_id: A1\nphotos: " + "[" * 200 + "]" * 200 + "\n---\n",
                      encoding="utf-8")
         with pytest.raises(UnsafeYamlError):
             read_plant(p, schema=schema)
@@ -487,7 +491,7 @@ class TestMalformedInput:
         catches PlantMarkdownError."""
         p = tmp_path / "unhashable.md"
         p.write_text(
-            "---\nid: A1\n? [a, b]\n: val\n---\n", encoding="utf-8"
+            "---\nplant_id: A1\n? [a, b]\n: val\n---\n", encoding="utf-8"
         )
         with pytest.raises(PlantMarkdownError):
             read_plant(p, schema=schema)
@@ -505,24 +509,24 @@ class TestBlockScalarsStayStringsViaImplicitResolver:
 
     def test_block_literal_digit_string_stays_string_not_int(self, tmp_path):
         p = tmp_path / "block.md"
-        p.write_text("---\nid: |\n  07\n---\nbody\n", encoding="utf-8")
+        p.write_text("---\nplant_id: |\n  07\n---\nbody\n", encoding="utf-8")
         got = read_plant(p)
-        assert isinstance(got["id"], str)
-        assert got["id"].strip() == "07"
+        assert isinstance(got["plant_id"], str)
+        assert got["plant_id"].strip() == "07"
 
     def test_block_folded_bool_looking_text_stays_string_not_bool(self, tmp_path):
         p = tmp_path / "folded.md"
-        p.write_text("---\nid: >\n  true\n---\nbody\n", encoding="utf-8")
+        p.write_text("---\nplant_id: >\n  true\n---\nbody\n", encoding="utf-8")
         got = read_plant(p)
-        assert isinstance(got["id"], str)
-        assert got["id"].strip() == "true"
+        assert isinstance(got["plant_id"], str)
+        assert got["plant_id"].strip() == "true"
 
     def test_block_literal_with_schema_coerces_as_string(self, tmp_path, schema):
         p = tmp_path / "block2.md"
-        p.write_text("---\nid: |\n  007\n---\nbody\n", encoding="utf-8")
+        p.write_text("---\nplant_id: |\n  007\n---\nbody\n", encoding="utf-8")
         got = read_plant(p, schema=schema)
-        assert isinstance(got["id"], str)
-        assert got["id"].strip() == "007"
+        assert isinstance(got["plant_id"], str)
+        assert got["plant_id"].strip() == "007"
 
 
 class TestCrlfPreservation:
@@ -533,7 +537,7 @@ class TestCrlfPreservation:
     def test_crlf_body_survives_exactly(self, tmp_path, schema):
         p = tmp_path / "crlf.md"
         body = "line one\r\nline two\r\n"
-        write_plant(p, {"id": "C1", "observation_log": body}, schema=schema)
+        write_plant(p, {"plant_id": "C1", "observation_log": body}, schema=schema)
         assert read_plant(p, schema=schema)["observation_log"] == body
 
     def test_crlf_rewrite_is_byte_stable(self, tmp_path, schema):
@@ -546,7 +550,7 @@ class TestCrlfPreservation:
         happen is grafting LF delimiters onto a CRLF body."""
         p = tmp_path / "crlf_hand.md"
         with open(p, "wb") as fh:
-            fh.write(b"---\r\nid: C4\r\n---\r\nnote one\r\nnote two\r\n")
+            fh.write(b"---\r\nplant_id: C4\r\n---\r\nnote one\r\nnote two\r\n")
         got = read_plant(p, schema=schema)
         write_plant(p, got, schema=schema)
         rewritten = p.read_bytes()
@@ -561,13 +565,13 @@ class TestCrlfPreservation:
     def test_mixed_crlf_and_lf_body_survives_exactly(self, tmp_path, schema):
         p = tmp_path / "mixed.md"
         body = "unix line\nwindows line\r\nunix again\n"
-        write_plant(p, {"id": "C2", "observation_log": body}, schema=schema)
+        write_plant(p, {"plant_id": "C2", "observation_log": body}, schema=schema)
         assert read_plant(p, schema=schema)["observation_log"] == body
 
     def test_manually_authored_crlf_file_read_verbatim(self, tmp_path, schema):
         p = tmp_path / "crlf_hand.md"
         with open(p, "wb") as fh:
-            fh.write(b"---\r\nid: C3\r\n---\r\nnote one\r\nnote two\r\n")
+            fh.write(b"---\r\nplant_id: C3\r\n---\r\nnote one\r\nnote two\r\n")
         assert read_plant(p, schema=schema)["observation_log"] == "note one\r\nnote two\r\n"
 
 
@@ -593,7 +597,7 @@ class TestEmptyFrontmatterRoundTrip:
         write_plant(p, {}, schema=schema)
         got = read_plant(p, schema=schema)
         assert got["observation_log"] == ""
-        assert got["id"] is None
+        assert got["plant_id"] is None
 
 
 class TestHostileYamlRecursionGuard:
@@ -609,7 +613,7 @@ class TestHostileYamlRecursionGuard:
         depth = 2000
         p = tmp_path / "deep.md"
         p.write_text(
-            "---\nid: A1\nphotos: " + "[" * depth + "]" * depth + "\n---\n",
+            "---\nplant_id: A1\nphotos: " + "[" * depth + "]" * depth + "\n---\n",
             encoding="utf-8",
         )
         with pytest.raises(PlantMarkdownError):
@@ -627,7 +631,7 @@ class TestCollectionTagsRejected:
     def test_yaml_set_tag_rejected(self, tmp_path, schema):
         p = tmp_path / "set.md"
         p.write_text(
-            "---\nid: A1\nissues: !!set {a: null, b: null}\n---\n", encoding="utf-8"
+            "---\nplant_id: A1\nissues: !!set {a: null, b: null}\n---\n", encoding="utf-8"
         )
         with pytest.raises(PlantMarkdownError):
             read_plant(p, schema=schema)
@@ -635,7 +639,7 @@ class TestCollectionTagsRejected:
     def test_yaml_omap_tag_rejected(self, tmp_path, schema):
         p = tmp_path / "omap.md"
         p.write_text(
-            "---\nid: A1\nissues: !!omap\n  - a: 1\n---\n", encoding="utf-8"
+            "---\nplant_id: A1\nissues: !!omap\n  - a: 1\n---\n", encoding="utf-8"
         )
         with pytest.raises(PlantMarkdownError):
             read_plant(p, schema=schema)
@@ -643,7 +647,7 @@ class TestCollectionTagsRejected:
     def test_yaml_pairs_tag_rejected(self, tmp_path, schema):
         p = tmp_path / "pairs.md"
         p.write_text(
-            "---\nid: A1\nissues: !!pairs\n  - a: 1\n---\n", encoding="utf-8"
+            "---\nplant_id: A1\nissues: !!pairs\n  - a: 1\n---\n", encoding="utf-8"
         )
         with pytest.raises(PlantMarkdownError):
             read_plant(p, schema=schema)
@@ -651,7 +655,7 @@ class TestCollectionTagsRejected:
     def test_yaml_binary_tag_rejected(self, tmp_path, schema):
         p = tmp_path / "binary.md"
         p.write_text(
-            "---\nid: A1\nissues: !!binary |\n  aGVsbG8=\n---\n", encoding="utf-8"
+            "---\nplant_id: A1\nissues: !!binary |\n  aGVsbG8=\n---\n", encoding="utf-8"
         )
         with pytest.raises(PlantMarkdownError):
             read_plant(p, schema=schema)
@@ -666,7 +670,7 @@ class TestAnchorsRejectedEvenUnaliased:
     def test_unaliased_anchor_is_still_rejected(self, tmp_path, schema):
         p = tmp_path / "anchor_only.md"
         p.write_text(
-            "---\nid: A1\nstructure: &a big\n---\n", encoding="utf-8"
+            "---\nplant_id: A1\nstructure: &a big\n---\n", encoding="utf-8"
         )
         with pytest.raises(UnsafeYamlError):
             read_plant(p, schema=schema)
@@ -682,7 +686,7 @@ class TestCustomScalarTagsRejected:
     def test_custom_tag_on_scalar_rejected(self, tmp_path, schema):
         p = tmp_path / "customtag.md"
         p.write_text(
-            "---\nid: A1\nissues: !whatever hello\n---\n", encoding="utf-8"
+            "---\nplant_id: A1\nissues: !whatever hello\n---\n", encoding="utf-8"
         )
         with pytest.raises(MalformedFrontmatterError):
             read_plant(p, schema=schema)
@@ -690,7 +694,7 @@ class TestCustomScalarTagsRejected:
     def test_python_name_tag_on_scalar_rejected(self, tmp_path, schema):
         p = tmp_path / "pyname.md"
         p.write_text(
-            "---\nid: A1\nissues: !!python/name:os.system ''\n---\n",
+            "---\nplant_id: A1\nissues: !!python/name:os.system ''\n---\n",
             encoding="utf-8",
         )
         with pytest.raises(PlantMarkdownError):
@@ -704,14 +708,14 @@ class TestWritePermissionsPreserved:
 
     def test_rewriting_existing_file_preserves_its_mode(self, tmp_path, schema):
         p = tmp_path / "perm.md"
-        write_plant(p, {"id": "A1"}, schema=schema)
+        write_plant(p, {"plant_id": "A1"}, schema=schema)
         os.chmod(p, 0o644)
-        write_plant(p, {"id": "A1", "vigor": 5}, schema=schema)
+        write_plant(p, {"plant_id": "A1", "vigor": 5}, schema=schema)
         assert (p.stat().st_mode & 0o777) == 0o644
 
     def test_new_file_gets_permissive_default_mode(self, tmp_path, schema):
         p = tmp_path / "newperm.md"
-        write_plant(p, {"id": "A1"}, schema=schema)
+        write_plant(p, {"plant_id": "A1"}, schema=schema)
         mode = p.stat().st_mode & 0o777
         assert mode != 0o600, "new plant files must not be created world-unreadable"
 
@@ -724,7 +728,7 @@ class TestUnknownSchemaTypeRejected:
     def test_load_schema_rejects_unknown_type(self, tmp_path):
         bad_template = tmp_path / "bad-template.md"
         bad_template.write_text(
-            "---\nid:\n  type: string\n  default: null\n  description: x\n"
+            "---\nplant_id:\n  type: string\n  default: null\n  description: x\n"
             "vigor:\n  type: banana\n  default: null\n  description: y\n---\n",
             encoding="utf-8",
         )
@@ -743,17 +747,17 @@ class TestWriteValidation:
 
     def test_write_creates_parent_directories(self, tmp_path, schema):
         p = tmp_path / "nested" / "deeper" / "P1.md"
-        write_plant(p, {"id": "P1"}, schema=schema)
-        assert read_plant(p, schema=schema)["id"] == "P1"
+        write_plant(p, {"plant_id": "P1"}, schema=schema)
+        assert read_plant(p, schema=schema)["plant_id"] == "P1"
 
     def test_write_is_atomic_leaves_no_temp_files(self, tmp_path, schema):
         p = tmp_path / "a.md"
-        write_plant(p, {"id": "A1"}, schema=schema)
+        write_plant(p, {"plant_id": "A1"}, schema=schema)
         assert [f.name for f in tmp_path.iterdir()] == ["a.md"]
 
     def test_write_ends_with_single_trailing_newline(self, tmp_path, schema):
         p = tmp_path / "nl.md"
-        write_plant(p, {"id": "A1", "observation_log": "note\n"}, schema=schema)
+        write_plant(p, {"plant_id": "A1", "observation_log": "note\n"}, schema=schema)
         text = p.read_text(encoding="utf-8")
         assert text.endswith("note\n") and not text.endswith("\n\n")
 
@@ -766,13 +770,13 @@ class TestBlockScalarsStayStrings:
 
     def test_folded_block_scalar_stays_string(self, tmp_path, schema):
         p = tmp_path / "block.md"
-        p.write_text("---\nid: A1\nvigor: >-\n  07\n---\n", encoding="utf-8")
+        p.write_text("---\nplant_id: A1\nvigor: >-\n  07\n---\n", encoding="utf-8")
         assert read_plant(p, schema=schema)["vigor"] == "07"
 
     def test_literal_block_scalar_stays_string_no_schema(self, tmp_path):
         p = tmp_path / "block2.md"
-        p.write_text("---\nid: |-\n  07\n---\n", encoding="utf-8")
-        assert read_plant(p)["id"] == "07"
+        p.write_text("---\nplant_id: |-\n  07\n---\n", encoding="utf-8")
+        assert read_plant(p)["plant_id"] == "07"
 
 
 class TestUnhashableKeyRejected:
@@ -804,6 +808,6 @@ class TestSymlinkSizeLimitNotBypassable:
         # the limit, must still be rejected by the capped-read approach.
         p = tmp_path / "big.md"
         big_body = "x" * (plant_markdown.MAX_FILE_BYTES + 100)
-        p.write_text(f"---\nid: A1\n---\n{big_body}", encoding="utf-8")
+        p.write_text(f"---\nplant_id: A1\n---\n{big_body}", encoding="utf-8")
         with pytest.raises(UnsafeYamlError):
             read_plant(p, schema=schema)

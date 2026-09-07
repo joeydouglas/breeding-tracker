@@ -45,6 +45,8 @@ __all__ = [
     "MigrationSummary",
     "VerificationReport",
     "REGISTRY_SOURCED_FIELDS",
+    "CANONICAL_PLANT_ID_KEY",
+    "SOURCE_PLANT_ID_KEY",
     "assert_sandbox_destination",
     "load_registry_entry",
     "build_project_record",
@@ -66,6 +68,26 @@ PLANTS_KEY = "plants"
 #: :func:`build_project_record` and :func:`verify_migration` so the writer and
 #: the verifier cannot drift apart about which fields the registry owns.
 REGISTRY_SOURCED_FIELDS = ("auto_create", "plant_id_prefixes")
+
+#: The plant ID key, on each side of the migration (NICK-966).
+#:
+#: ``tracker.json`` -- the SOURCE -- spells a plant's identifier ``id``. That
+#: is the pre-Phase-2 JSON format's own native key and it is *correct* there:
+#: ``json_backend`` is restored verbatim from commit 2dd0537 precisely so a
+#: NICK-949 rollback reproduces the original file byte for byte, so the
+#: tracker's spelling must not be "fixed".
+#:
+#: The markdown corpus -- the DESTINATION -- spells it ``plant_id`` (Joey's
+#: decision, recorded on NICK-701 2026-09-07; the runtime read/write path was
+#: aligned to it by NICK-965's ``plant_record`` module). So this migration
+#: RENAMES the field on the way out rather than copying it through.
+#:
+#: The two constants are declared together, and consumed by
+#: :func:`build_plant_record`, :func:`_plant_id` and :func:`verify_migration`
+#: alike, so the writer and the verifier cannot drift apart about which
+#: spelling lives on which side.
+SOURCE_PLANT_ID_KEY = "id"
+CANONICAL_PLANT_ID_KEY = "plant_id"
 
 
 class TrackerMigrationError(Exception):
@@ -335,11 +357,46 @@ def build_project_record(
     return record, defaulted
 
 
+def _source_plant_id(plant: Mapping[str, Any]) -> Any:
+    """The ID a source plant record carries, under either spelling (NICK-966).
+
+    ``tracker.json`` uses ``id``; a record that has already been through the
+    rename (or a hand-written fixture) may use ``plant_id``. Both are
+    accepted. Both present and DISAGREEING is a corrupt record: silently
+    preferring one spelling could write one plant's data under another's
+    filename, so it raises. (Same contract as
+    ``monitor-core``'s ``plant_record.plant_id_of``, which guards the runtime
+    path; duplicated rather than imported because this repo does not depend
+    on ``monitor-core``.)
+    """
+    canonical = plant.get(CANONICAL_PLANT_ID_KEY)
+    legacy = plant.get(SOURCE_PLANT_ID_KEY)
+    if canonical is not None and legacy is not None and canonical != legacy:
+        raise TrackerMigrationError(
+            "plant record has conflicting ids: "
+            f"{CANONICAL_PLANT_ID_KEY}={canonical!r} vs "
+            f"{SOURCE_PLANT_ID_KEY}={legacy!r}"
+        )
+    return canonical if canonical is not None else legacy
+
+
 def build_plant_record(
     plant: Mapping[str, Any], schema: Mapping[str, Mapping[str, Any]]
 ) -> tuple[dict, list[str]]:
-    """One plant's values, with template defaults for anything absent."""
+    """One plant's values, with template defaults for anything absent.
+
+    The source's ``id`` is RENAMED to the canonical ``plant_id`` (NICK-966).
+    Renaming rather than copying matters: leaving ``id`` in place while the
+    template declares ``plant_id`` would emit a file carrying BOTH keys --
+    ``id: MG07`` from the source and ``plant_id: null`` materialised from the
+    template default -- which is exactly the dual-key shape
+    ``plant_record.plant_id_of`` rejects as corrupt at runtime.
+    """
     record = dict(plant)
+    plant_id = _source_plant_id(record)
+    record.pop(SOURCE_PLANT_ID_KEY, None)
+    if plant_id is not None:
+        record[CANONICAL_PLANT_ID_KEY] = plant_id
     defaulted = _apply_defaults(record, schema, PLANT_BODY_FIELD)
     record.setdefault(PLANT_BODY_FIELD, "")
     return record, defaulted
@@ -358,7 +415,7 @@ def _plants_of(tracker: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 def _plant_id(plant: Mapping[str, Any], index: int) -> str:
-    plant_id = plant.get("id")
+    plant_id = _source_plant_id(plant)
     if not isinstance(plant_id, str) or not plant_id.strip():
         raise TrackerMigrationError(f"plant #{index} has no usable 'id': {plant!r}")
     if "/" in plant_id or "\\" in plant_id or plant_id in (".", ".."):
@@ -584,7 +641,13 @@ def verify_migration(
             report.missing_records.append(plant_id)
             continue
         got = plant_markdown.read_plant(plant_file, schema=plant_schema)
-        _diff_record(plant_id, plant, got, report)
+        # NICK-966: the source's `id` lives under `plant_id` in the markdown.
+        # Diff the RENAMED source record, not the raw one -- otherwise `id`
+        # reads as a lost field on every single plant and the gate is useless.
+        expected_plant = dict(plant)
+        expected_plant.pop(SOURCE_PLANT_ID_KEY, None)
+        expected_plant[CANONICAL_PLANT_ID_KEY] = plant_id
+        _diff_record(plant_id, expected_plant, got, report)
 
     report.extra_records = sorted(set(migrated_ids) - set(source_ids))
     return report

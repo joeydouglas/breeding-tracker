@@ -28,8 +28,10 @@ from helpers_migration import (  # noqa: F401  (fixture re-export)
     PLANT_TEMPLATE,
     PROJECT_TEMPLATE,
     REPO,
+    expected_plant_record as _expected_plant_record,
     migrate_project,
     no_side_effects,
+    plant_id_of_source as _plant_id_of_source,
     registry_entry as _registry_entry,
     sibling_prefixes as _sibling_prefixes,
     tracker_json as _tracker_json,
@@ -170,13 +172,15 @@ def test_every_inventoried_plant_field_survives_on_every_plant(
     schema = load_schema(PLANT_TEMPLATE)
     lost, changed, compared = [], [], 0
     for plant in _tracker_json(spec)["plants"]:
-        got = read_plant(out / "plants" / f"{plant['id']}.md", schema=schema)
-        for key, original in plant.items():
+        plant_id = _plant_id_of_source(plant)
+        got = read_plant(out / "plants" / f"{plant_id}.md", schema=schema)
+        # NICK-966: `id` in the tracker is `plant_id` in the markdown.
+        for key, original in _expected_plant_record(plant).items():
             compared += 1
             if key not in got:
-                lost.append(f"{plant['id']}.{key}")
+                lost.append(f"{plant_id}.{key}")
             elif got[key] != original:
-                changed.append(f"{plant['id']}.{key}")
+                changed.append(f"{plant_id}.{key}")
     assert not lost, lost
     assert not changed, changed[:10]
     assert compared, "compared nothing -- the check would be vacuous"
@@ -249,15 +253,21 @@ def test_the_whole_plants_array_reconstructs_from_markdown(
     _, out = _migrate(spec, tmp_path)
     schema = load_schema(PLANT_TEMPLATE)
     source_plants = _tracker_json(spec)["plants"]
+    # NICK-966: rebuild the RENAMED shape (`id` -> `plant_id`) and compare
+    # against the same, so the ID is still genuinely compared rather than
+    # dropped from both sides.
+    expected = [_expected_plant_record(p) for p in source_plants]
     rebuilt = [
         {
-            k: read_plant(out / "plants" / f"{p['id']}.md", schema=schema)[k]
-            for k in p
+            k: read_plant(
+                out / "plants" / f"{_plant_id_of_source(p)}.md", schema=schema
+            )[k]
+            for k in e
         }
-        for p in source_plants
+        for p, e in zip(source_plants, expected)
     ]
     assert json.dumps(rebuilt, sort_keys=True) == json.dumps(
-        source_plants, sort_keys=True
+        expected, sort_keys=True
     )
 
 

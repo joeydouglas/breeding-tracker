@@ -13,15 +13,37 @@ from pathlib import Path
 import pytest
 
 from plant_markdown import load_schema, read_plant, write_plant
+from tracker_migration import CANONICAL_PLANT_ID_KEY, SOURCE_PLANT_ID_KEY
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "plant-template.md"
 TRACKERS = sorted(glob.glob("/home/joey/.hermes/breeding/*/tracker.json"))
 
 
 def _plants(tracker_path):
+    """Every plant in a real tracker, in the markdown corpus's key shape.
+
+    NICK-966: ``tracker.json`` spells the ID field ``id`` (its own native,
+    still-correct key -- ``json_backend`` reproduces that format byte for
+    byte for a NICK-949 rollback), while the markdown corpus and
+    ``plant-template.md`` spell it ``plant_id``. This module round-trips real
+    tracker records THROUGH the markdown writer, so it must apply the same
+    rename the migration does, or every plant would carry an un-schema'd
+    ``id`` key and the template-coverage check below would fail on data that
+    is in fact fully covered.
+
+    The rename is delegated to ``tracker_migration`` rather than re-spelled
+    here so the two cannot drift.
+    """
     data = json.loads(Path(tracker_path).read_text(encoding="utf-8"))
     plants = data.get("plants", [])
-    return plants if isinstance(plants, list) else list(plants.values())
+    plants = plants if isinstance(plants, list) else list(plants.values())
+    renamed = []
+    for plant in plants:
+        record = dict(plant)
+        if SOURCE_PLANT_ID_KEY in record:
+            record[CANONICAL_PLANT_ID_KEY] = record.pop(SOURCE_PLANT_ID_KEY)
+        renamed.append(record)
+    return renamed
 
 
 @pytest.mark.skipif(not TRACKERS, reason="no real tracker.json files present")
@@ -33,12 +55,12 @@ def test_every_real_plant_round_trips_with_zero_data_loss(tracker):
 
     with tempfile.TemporaryDirectory() as tmp:
         for plant in plants:
-            path = Path(tmp) / f"{plant['id']}.md"
+            path = Path(tmp) / f"{plant[CANONICAL_PLANT_ID_KEY]}.md"
             write_plant(path, plant, schema=schema)
             got = read_plant(path, schema=schema)
             for field, original in plant.items():
                 assert got[field] == original, (
-                    f"{Path(tracker).parent.name}/{plant['id']} field {field!r} "
+                    f"{Path(tracker).parent.name}/{plant[CANONICAL_PLANT_ID_KEY]} field {field!r} "
                     f"changed: {original!r} -> {got[field]!r}"
                 )
 
@@ -63,9 +85,9 @@ def test_real_plants_are_byte_stable_across_rewrites(tracker):
     schema = load_schema(TEMPLATE)
     with tempfile.TemporaryDirectory() as tmp:
         for plant in _plants(tracker):
-            path = Path(tmp) / f"{plant['id']}.md"
+            path = Path(tmp) / f"{plant[CANONICAL_PLANT_ID_KEY]}.md"
             write_plant(path, plant, schema=schema)
             write_plant(path, read_plant(path, schema=schema), schema=schema)
             canonical = path.read_bytes()
             write_plant(path, read_plant(path, schema=schema), schema=schema)
-            assert path.read_bytes() == canonical, plant["id"]
+            assert path.read_bytes() == canonical, plant[CANONICAL_PLANT_ID_KEY]

@@ -143,12 +143,15 @@ def test_the_id_field_inside_each_file_keeps_its_lowercase_form(migrated):
     _, out = migrated
     for plant_id in EXPECTED_IDS:
         got = _plant(out, plant_id)
-        assert got["id"] == plant_id
-        assert got["id"] != plant_id.upper()
+        # NICK-966: the migrated file's ID key is `plant_id`, not `id`.
+        assert got["plant_id"] == plant_id
+        assert got["plant_id"] != plant_id.upper()
         frontmatter = (out / "plants" / f"{plant_id}.md").read_text(
             encoding="utf-8"
         ).split("\n---\n", 1)[0]
-        assert re.search(rf"^id: ['\"]?{plant_id}['\"]?$", frontmatter, re.M), plant_id
+        assert re.search(
+            rf"^plant_id: ['\"]?{plant_id}['\"]?$", frontmatter, re.M
+        ), plant_id
 
 
 def test_the_two_char_prefix_does_not_fire_inside_ordinary_prose(migrated):
@@ -241,7 +244,7 @@ def test_records_are_matched_by_id_and_never_positionally(migrated):
     # Each log names its own tab, so a shuffled roster is visible per record.
     for plant_id in EXPECTED_IDS:
         got = _plant(out, plant_id)
-        assert got["id"] == plant_id
+        assert got["plant_id"] == plant_id
         body = (out / "plants" / f"{plant_id}.md").read_text(
             encoding="utf-8", newline=""
         ).split("\n---\n", 1)[1]
