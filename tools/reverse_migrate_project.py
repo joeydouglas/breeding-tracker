@@ -206,6 +206,30 @@ def main(argv=None) -> int:
                   f"is NOT represented in the produced tracker: "
                   f"{orphan['text'][:100]!r}")
 
+    # Not a PROBLEM and deliberately not part of `report.ok` (Joey, 2026-09-07)
+    # -- but it must be impossible to miss. Printed for dry runs AND applies,
+    # before anything is written, so whoever is restoring this file knows it
+    # will not be byte-identical to the pre-cutover one.
+    for record, fields in sorted(report.known_deviations.items()):
+        print("")
+        print("  ============================ KNOWN DEVIATION "
+              "============================")
+        print("  KNOWN DEVIATION (pre-existing, accepted by Joey 2026-09-07): "
+              f"on {record},")
+        print("  the following fields are template defaults invented by the "
+              "FORWARD migration")
+        print("  and do not exist in the pre-cutover tracker.json:")
+        print(f"      {', '.join(sorted(fields))}")
+        print("  They are inert (null/empty), never fabricated content, and do "
+              "NOT block this")
+        print("  gate. The rolled-back tracker.json WILL carry these extra "
+              "keys. Root cause is")
+        print("  upstream in the forward migration (NICK-966) and is out of "
+              "this tool's scope.")
+        print("  =========================================================="
+              "==================")
+        print("")
+
     if not args.apply:
         print(f"  [dry run] nothing written; pass --apply to write {target}")
         return 0 if report.ok else 1

@@ -717,14 +717,13 @@ def test_cli_reports_a_corrupted_project_field(forward, capsys, monkeypatch):
 #: The exact spurious top-level keys each project's round trip adds, all of
 #: them template defaults materialised by the forward migration. Any change
 #: to this map is a real behavioural change and must be justified.
-KNOWN_MATERIALISED_EXTRAS = {
-    "lantz": {"breeder_lineage", "genetics"},
-    "spaced-paste": {"breeder_lineage", "genetics"},
-    "honey-badger-haze-pheno-hunt": set(),
-    "kibungan-pheno-hunt": set(),
-    "paloma-coma": set(),
-    "mule-fuel-x-nana-glue": {"breeder_lineage", "genetics", "notes_meta"},
-}
+#:
+#: This map is NOT re-declared here. It lives in the module under test, which
+#: needs it to surface these deviations to an operator (see the
+#: known-deviation tests at the end of this file), and a second copy kept in
+#: the tests could drift from the one the tool actually acts on -- the tests
+#: would then keep passing while the shipped behaviour changed.
+KNOWN_MATERIALISED_EXTRAS = reverse_migration.KNOWN_MATERIALISED_EXTRAS
 
 
 @pytest.mark.parametrize("slug", ALL_SLUGS)
@@ -781,3 +780,172 @@ def test_round_trip_preserves_every_original_top_level_value(
         if field == "plants":
             continue
         assert produced[field] == value, f"{slug}.{field} changed"
+
+
+# ------------------------------- known-deviation surfacing (GAP 2 note) -----
+#
+# Joey's decision (2026-09-07): the phantom fields documented above are inert
+# template defaults, their root cause is upstream in NICK-966's already-shipped
+# forward migration, and they must NOT block the rollback-safety gate. But
+# "does not block" must not mean "invisible": an operator running an actual
+# rollback has to SEE that the file they are about to restore differs from the
+# pre-cutover one, rather than reading a bare ``ok=True`` that quietly hides it.
+#
+# So the carve-out is deliberately narrow and is tested from both sides: the
+# EXACT known keys land in ``known_deviations`` and keep the gate green, while
+# ANY other unexpected key must still fail the gate as an illegal field. A
+# carve-out that swallowed a genuine new bug would be worse than no carve-out.
+
+
+def test_known_deviations_are_exposed_in_as_dict_and_repr(forward, plant_schema):
+    project_dir = forward("lantz")
+    produced = reverse_migration.reverse_migrate_tracker(project_dir, plant_schema)
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    assert "known_deviations" in report.as_dict()
+    assert "known_deviations" in repr(report)
+
+
+@pytest.mark.parametrize("slug", ALL_SLUGS)
+def test_known_deviations_report_exactly_the_materialised_extras(
+    slug, forward, plant_schema
+):
+    """Each affected project reports its own known extras; the rest report none.
+
+    The comparison is against the LIVE tracker.json, i.e. what a real rollback
+    would be restoring over -- the same source the KNOWN_MATERIALISED_EXTRAS
+    map was measured from.
+    """
+    project_dir = forward(slug)
+    produced = reverse_migration.reverse_migrate_tracker(project_dir, plant_schema)
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+
+    expected = KNOWN_MATERIALISED_EXTRAS[slug]
+    reported = set(report.known_deviations.get(PROJECT_ID, []))
+    assert reported == expected, (
+        f"{slug}: known_deviations {sorted(reported)} != expected "
+        f"{sorted(expected)}"
+    )
+    if not expected:
+        assert PROJECT_ID not in report.known_deviations, (
+            f"{slug} has no known extras and must not appear at all"
+        )
+
+
+@pytest.mark.parametrize("slug", ALL_SLUGS)
+def test_known_deviations_alone_keep_the_gate_green(slug, forward, plant_schema):
+    """Joey's decision: known inert extras are surfaced, never blocking."""
+    project_dir = forward(slug)
+    produced = reverse_migration.reverse_migrate_tracker(project_dir, plant_schema)
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    assert report.ok, report.as_dict()
+    assert not report.illegal_fields.get(PROJECT_ID), (
+        f"{slug}: a KNOWN extra was miscounted as illegal: "
+        f"{report.illegal_fields.get(PROJECT_ID)}"
+    )
+
+
+def test_an_unknown_extra_key_still_fails_the_gate(forward, plant_schema):
+    """The carve-out must not swallow a genuine new bug.
+
+    This is the test that makes the carve-out safe to have at all: a key that
+    is NOT in the known set stays an illegal field and still drives ``ok``
+    False, even on a project (lantz) that legitimately carries known
+    deviations at the same time.
+    """
+    project_dir = forward("lantz")
+    produced = reverse_migration.reverse_migrate_tracker(project_dir, plant_schema)
+    produced["totally_new_bug"] = "fabricated content"
+
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+
+    assert not report.ok, report.as_dict()
+    assert "totally_new_bug" in report.illegal_fields[PROJECT_ID]
+    assert "totally_new_bug" not in report.known_deviations.get(PROJECT_ID, [])
+    # ...and the known ones are still classified as known, not promoted to
+    # illegal just because something else went wrong.
+    assert set(report.known_deviations[PROJECT_ID]) == KNOWN_MATERIALISED_EXTRAS[
+        "lantz"
+    ]
+
+
+def test_a_known_key_carrying_real_content_is_not_excused(forward, plant_schema):
+    """The carve-out covers inert DEFAULTS, not the key name in the abstract.
+
+    ``genetics`` is a known materialised extra only while it is the template's
+    own empty default. If it ever comes back holding invented content, that is
+    fabricated data in a rollback artifact: it must fail the gate and must
+    stop being reported as a benign known deviation.
+    """
+    project_dir = forward("lantz")
+    produced = reverse_migration.reverse_migrate_tracker(project_dir, plant_schema)
+    produced["genetics"] = "INVENTED STRAIN LINEAGE"
+
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+
+    assert not report.ok, report.as_dict()
+    changed = report.changed_fields[PROJECT_ID]
+    assert any(entry["field"] == "genetics" for entry in changed), changed
+    assert "genetics" not in report.known_deviations.get(PROJECT_ID, [])
+
+
+def test_cli_dry_run_prints_the_known_deviation_warning(forward, capsys):
+    """An operator must see the deviation before deciding to roll back."""
+    project_dir = forward("lantz")
+    exit_code = rmp.main(
+        [
+            "lantz",
+            "--breeding-root", str(project_dir.parent),
+            "--registry", str(REGISTRY),
+            "--template", str(PLANT_TEMPLATE),
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "KNOWN DEVIATION" in out
+    assert "breeder_lineage" in out
+    assert "genetics" in out
+
+
+def test_cli_apply_still_warns_and_writes(forward, capsys):
+    """The warning precedes the write; it does not replace it."""
+    project_dir = forward("lantz")
+    exit_code = rmp.main(
+        [
+            "lantz",
+            "--breeding-root", str(project_dir.parent),
+            "--registry", str(REGISTRY),
+            "--template", str(PLANT_TEMPLATE),
+            "--apply",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "KNOWN DEVIATION" in out
+    assert (project_dir / "tracker.json").is_file()
+    assert out.index("KNOWN DEVIATION") < out.index("[written]")
+
+
+def test_cli_says_nothing_about_deviations_when_there_are_none(forward, capsys):
+    """No noise on the three clean projects."""
+    project_dir = forward("paloma-coma")
+    rmp.main(
+        [
+            "paloma-coma",
+            "--breeding-root", str(project_dir.parent),
+            "--registry", str(REGISTRY),
+            "--template", str(PLANT_TEMPLATE),
+        ]
+    )
+    assert "KNOWN DEVIATION" not in capsys.readouterr().out

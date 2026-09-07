@@ -65,6 +65,9 @@ __all__ = [
     "ORDER_KEY",
     "PROJECT_RECORD_ID",
     "MARKDOWN_ONLY_PROJECT_FIELDS",
+    "KNOWN_MATERIALISED_EXTRAS",
+    "KNOWN_MATERIALISED_EXTRA_FIELDS",
+    "INERT_DEFAULT_VALUES",
     "read_project_record",
     "read_plant_records",
     "reverse_migrate_tracker",
@@ -110,6 +113,78 @@ _OBSERVATION_HEADER = re.compile(
 )
 
 
+# ---------------------------------------------- known upstream deviation ----
+#
+# NICK-966's already-shipped forward migration
+# (``tracker_migration._apply_defaults``) materialises EVERY template-declared
+# project field into ``project.md``, whether or not the source ``tracker.json``
+# actually had that key. That destroys the distinction between "the tracker
+# never had this field" and "the tracker had it, set to null", before a reverse
+# migration ever runs:
+#
+#     lantz/project.md contains  `genetics: null`  and  `google_sheet_id: null`
+#
+# Byte-identical declarations, identical template defaults -- yet
+# ``google_sheet_id`` IS a key of lantz's real tracker.json and ``genetics`` is
+# NOT. No function of project.md can separate them. Fixing this properly means
+# changing what the forward migration writes into every live project.md, which
+# is out of this tool's scope.
+#
+# JOEY'S DECISION (2026-09-07): these residual extras are ACCEPTED and must not
+# block the rollback-safety gate -- they are inert template defaults, never
+# fabricated content -- but they must be SURFACED explicitly rather than hidden
+# inside a bare ``ok=True``. An operator performing a real rollback has to see
+# that the file being restored differs from the pre-cutover one.
+#
+# Hence the carve-out below, kept deliberately narrow: a key qualifies only if
+# it is named here AND still carries an inert default value. Anything else --
+# an unlisted key, or one of these carrying real-looking content -- stays a
+# hard failure, because a carve-out that swallowed a genuine new bug would be
+# worse than no carve-out at all.
+
+#: The exact spurious top-level keys each live project's round trip adds, as
+#: measured against the pre-cutover ``tracker.json``. Exported so the tests
+#: assert against the SAME source of truth the tool acts on, rather than a
+#: second copy that could silently drift. Any change here is a real
+#: behavioural change and must be justified.
+KNOWN_MATERIALISED_EXTRAS = {
+    "lantz": {"breeder_lineage", "genetics"},
+    "spaced-paste": {"breeder_lineage", "genetics"},
+    "honey-badger-haze-pheno-hunt": set(),
+    "kibungan-pheno-hunt": set(),
+    "paloma-coma": set(),
+    "mule-fuel-x-nana-glue": {"breeder_lineage", "genetics", "notes_meta"},
+}
+
+#: Every field name any project may materialise, flattened. The verifier works
+#: per-project-directory and is not told which slug it is looking at (a
+#: tmp_path rehearsal copy has no reliable slug), so eligibility is decided by
+#: field name plus inert value rather than by slug. The per-slug map above
+#: remains the documented, test-pinned record of which project gains what.
+KNOWN_MATERIALISED_EXTRA_FIELDS = frozenset(
+    field for fields in KNOWN_MATERIALISED_EXTRAS.values() for field in fields
+)
+
+#: Values a materialised template default may hold. A key outside this set is
+#: carrying CONTENT, which is fabricated data in a rollback artifact and is
+#: never excused -- ``genetics: null`` is a cosmetic blemish,
+#: ``genetics: "INVENTED LINEAGE"`` is corruption.
+INERT_DEFAULT_VALUES = (None, {}, [], "")
+
+
+def _is_known_materialised_extra(field: str, value: Any) -> bool:
+    """Whether ``field``/``value`` is a documented, inert forward-migration extra.
+
+    ``value in INERT_DEFAULT_VALUES`` is intentionally an equality test, not an
+    emptiness test: ``0`` and ``False`` are real values a tracker could hold,
+    and ``bool`` compares equal to neither ``None`` nor ``{}``.
+    """
+    return field in KNOWN_MATERIALISED_EXTRA_FIELDS and any(
+        value == inert and type(value) is type(inert)
+        for inert in INERT_DEFAULT_VALUES
+    )
+
+
 class ReverseMigrationError(Exception):
     """The reverse migration cannot be performed as requested."""
 
@@ -135,6 +210,13 @@ class ReverseVerificationReport:
         Body content on disk that the produced tracker's ``observation_log``
         does not carry. This is the plan's step 7c zero-loss check: such
         content is FLAGGED, never silently dropped.
+    ``known_deviations``
+        Extra fields that ARE a documented, accepted consequence of the
+        forward migration materialising template defaults (see
+        :data:`KNOWN_MATERIALISED_EXTRAS`). Deliberately NOT part of ``ok``:
+        per Joey's 2026-09-07 decision these do not block a rollback, but they
+        must still be reported so an operator sees the deviation instead of a
+        bare ``ok=True`` that hides it. Callers are expected to print them.
     """
 
     def __init__(self) -> None:
@@ -144,6 +226,7 @@ class ReverseVerificationReport:
         self.lost_fields: dict[str, list[str]] = {}
         self.changed_fields: dict[str, list[dict[str, Any]]] = {}
         self.illegal_fields: dict[str, list[str]] = {}
+        self.known_deviations: dict[str, list[str]] = {}
         self.unrepresented_observations: dict[str, list[dict[str, Any]]] = {}
         self.plant_count_markdown: int = 0
         self.plant_count_produced: int = 0
@@ -188,6 +271,9 @@ class ReverseVerificationReport:
             "lost_fields": self.lost_fields,
             "changed_fields": self.changed_fields,
             "illegal_fields": self.illegal_fields,
+            # NOT a component of `ok` by design (Joey, 2026-09-07) -- reported
+            # so a rollback operator sees the deviation, not so it blocks.
+            "known_deviations": self.known_deviations,
             "unrepresented_observations": self.unrepresented_observations,
         }
 
@@ -417,6 +503,23 @@ def _verify_project_record(
       field is data corruption in a rollback artifact just as much as a
       missing one, and ``plants`` aside, nothing may appear from nowhere.
 
+    ONE addition that is NOT a failure mode: fields named in
+    :data:`KNOWN_MATERIALISED_EXTRA_FIELDS` and still holding an inert
+    template default are recorded under ``known_deviations``. These are not
+    "extra" relative to the markdown -- ``project.md`` genuinely contains
+    them, which is exactly the problem: the forward migration put them there,
+    so they compare equal and would otherwise be completely invisible here.
+    They ARE extra relative to the pre-cutover ``tracker.json`` a rollback
+    restores over, which this function never sees. Per Joey's 2026-09-07
+    decision they must not block the gate (they are provably inert defaults,
+    never fabricated content) but must be surfaced, so an operator sees the
+    deviation instead of a bare ``ok=True`` that hides it.
+
+    The check is value-sensitive on purpose. ``genetics: null`` on lantz is a
+    materialised default; ``genetics: "(C99 x White Widow) x Ms. Universe
+    #10"`` on honey-badger-haze is real tracker content and is correctly left
+    alone. Only the inert spelling is ever excused or annotated.
+
     ``records_compared`` counts the project as one record and
     ``fields_compared`` counts each of its fields, exactly as for a plant, so
     ``verified_something`` stays an honest measure of what was checked.
@@ -438,8 +541,15 @@ def _verify_project_record(
     # `plants` is the array this function's caller verifies element by
     # element; it is legitimately present and is not a project field.
     for field in produced_tracker:
-        if field != PLANTS_KEY and field not in expected:
+        if field == PLANTS_KEY:
+            continue
+        if field not in expected:
             report.illegal_fields.setdefault(PROJECT_RECORD_ID, []).append(field)
+        elif _is_known_materialised_extra(field, produced_tracker[field]):
+            # Present, equal, and inert -- annotate, never fail. See docstring.
+            report.known_deviations.setdefault(PROJECT_RECORD_ID, []).append(
+                field
+            )
 
 
 def verify_reverse_migration(
