@@ -31,6 +31,16 @@ verification passes:
 
 Run:  .venv/bin/python tools/reverse_migrate_project.py <slug>
       (add --apply to actually write tracker.json; the default is a dry run)
+
+NOTE -- ``--overwrite`` IS STRICTER THAN THE SPEC. The spec says the tool
+"refuses to overwrite an existing tracker.json unless --apply passed AND
+verification passed". This tool additionally requires an explicit
+``--overwrite`` before it will replace a tracker.json that already exists.
+That is a deliberate belt-and-braces choice, not an oversight: a rollback
+rehearsal is run repeatedly, and the pre-cutover tracker.json is the very file
+a real rollback would need, so clobbering it must be spelled out rather than
+implied by --apply. Documented here so the extra flag is not a silent surprise
+to anyone working from the spec.
 """
 
 from __future__ import annotations
@@ -156,7 +166,9 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path, default=None,
                         help=f"where to write (default: <project>/{TRACKER_FILENAME})")
     parser.add_argument("--overwrite", action="store_true",
-                        help="allow replacing an existing tracker.json")
+                        help="allow replacing an existing tracker.json (required "
+                             "in addition to --apply when the target already "
+                             "exists; stricter than the spec, see module docstring)")
     parser.add_argument("--apply", action="store_true",
                         help="actually write (default: dry run)")
     args = parser.parse_args(argv)
@@ -177,14 +189,17 @@ def main(argv=None) -> int:
     ):
         if values:
             print(f"    PROBLEM: {label}: {values}")
-    for plant_id, fields in sorted(report.lost_fields.items()):
-        print(f"    PROBLEM: {plant_id} lost fields: {fields}")
-    for plant_id, changes in sorted(report.changed_fields.items()):
+    # `record` is a plant id, or reverse_migration.PROJECT_RECORD_ID for the
+    # project's own top-level fields -- both are reported the same way.
+    for record, fields in sorted(report.lost_fields.items()):
+        print(f"    PROBLEM: {record} lost fields: {fields}")
+    for record, changes in sorted(report.changed_fields.items()):
         for change in changes:
-            print(f"    PROBLEM: {plant_id}.{change['field']} changed: "
+            print(f"    PROBLEM: {record}.{change['field']} changed: "
                   f"{change['expected']!r} -> {change['got']!r}")
-    for plant_id, fields in sorted(report.illegal_fields.items()):
-        print(f"    PROBLEM: {plant_id} carries markdown-only fields: {fields}")
+    for record, fields in sorted(report.illegal_fields.items()):
+        print(f"    PROBLEM: {record} carries fields the markdown does not: "
+              f"{fields}")
     for plant_id, orphans in sorted(report.unrepresented_observations.items()):
         for orphan in orphans:
             print(f"    PROBLEM: {plant_id} observation {orphan['timestamp']} "
@@ -198,7 +213,16 @@ def main(argv=None) -> int:
         print("  REFUSING TO WRITE: verification failed -- escalate (plan 7.2 §7c)")
         return 1
 
-    written = apply(result, target, overwrite=args.overwrite)
+    # apply() re-checks every gate itself (verification, filename, overwrite).
+    # Those refusals are expected operator outcomes, not crashes: a second
+    # --apply without --overwrite used to escape as a raw ReverseMigrationError
+    # traceback while the verification-failure path above printed a clean
+    # message and exited 1. Both now look the same to whoever is running it.
+    try:
+        written = apply(result, target, overwrite=args.overwrite)
+    except ReverseMigrationError as exc:
+        print(f"  REFUSING TO WRITE: {exc}")
+        return 1
     print(f"  [written] {written}")
     return 0
 

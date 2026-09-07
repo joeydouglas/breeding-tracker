@@ -96,7 +96,14 @@ def _by_id(tracker):
 def test_produced_tracker_has_the_real_trackers_top_level_keys(
     slug, forward, plant_schema
 ):
-    """Every key the real tracker.json carries must come back."""
+    """Every key the real tracker.json carries must come back.
+
+    This only checks ONE direction (nothing lost). The other direction --
+    which keys the round trip ADDS -- is deliberately not asserted here
+    because it cannot be a plain equality; see
+    ``test_round_trip_top_level_keys_lose_nothing_and_add_only_known_defaults``
+    below, which pins both directions exactly and carries the explanation.
+    """
     produced = reverse_migration.reverse_migrate_tracker(
         forward(slug), plant_schema
     )
@@ -497,3 +504,280 @@ def test_cli_plan_carries_post_cutover_observations_into_the_tracker(forward):
     )
     assert result.report.ok, result.report.as_dict()
     assert "unrepresented" in json.dumps(result.tracker)
+
+
+# ------------------------------------- project-level verification (GAP 1) ---
+#
+# The first cut of ``verify_reverse_migration`` compared ONLY the ``plants``
+# array. Every top-level project field -- cross_name, google_sheet_id,
+# drive_folders, github_repo -- could be corrupted, deleted, retyped or
+# invented and the report still came back ``ok=True``. That defeats the whole
+# purpose of the gate: plan Task 7.2 step 7c says "diff the reverse-migration
+# output against the markdown source [...] if the diff shows any discrepancy,
+# STOP", and that requirement is scoped to the whole tracker.json, not to the
+# plants array. These five cases are the reviewer's exact reproductions.
+
+
+PROJECT_ID = reverse_migration.PROJECT_RECORD_ID
+
+
+def _clean(project_dir, plant_schema):
+    produced = reverse_migration.reverse_migrate_tracker(project_dir, plant_schema)
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    assert report.ok, report.as_dict()
+    return produced
+
+
+def test_verification_flags_a_garbage_cross_name(forward, plant_schema):
+    project_dir = forward("lantz")
+    produced = _clean(project_dir, plant_schema)
+    produced["cross_name"] = "GARBAGE-NOT-THE-REAL-NAME"
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    assert not report.ok
+    changed = report.changed_fields[PROJECT_ID]
+    assert any(entry["field"] == "cross_name" for entry in changed), changed
+
+
+def test_verification_flags_a_deleted_google_sheet_id(forward, plant_schema):
+    project_dir = forward("lantz")
+    produced = _clean(project_dir, plant_schema)
+    del produced["google_sheet_id"]
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    assert not report.ok
+    assert "google_sheet_id" in report.lost_fields[PROJECT_ID]
+
+
+def test_verification_flags_corrupted_drive_folders(forward, plant_schema):
+    """A dict retyped to a string is a change, not an equal value."""
+    project_dir = forward("lantz")
+    produced = _clean(project_dir, plant_schema)
+    produced["drive_folders"] = "corrupted-into-a-string"
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    assert not report.ok
+    changed = report.changed_fields[PROJECT_ID]
+    assert any(entry["field"] == "drive_folders" for entry in changed), changed
+
+
+def test_verification_flags_a_nulled_github_repo(forward, plant_schema):
+    project_dir = forward("lantz")
+    produced = _clean(project_dir, plant_schema)
+    produced["github_repo"] = None
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    assert not report.ok
+    changed = report.changed_fields[PROJECT_ID]
+    assert any(entry["field"] == "github_repo" for entry in changed), changed
+
+
+def test_verification_flags_an_invented_top_level_key(forward, plant_schema):
+    """A field the markdown never had must not appear in the tracker."""
+    project_dir = forward("lantz")
+    produced = _clean(project_dir, plant_schema)
+    produced["invented_key"] = "where did this come from"
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    assert not report.ok
+    assert "invented_key" in report.illegal_fields[PROJECT_ID]
+
+
+@pytest.mark.parametrize("slug", ALL_SLUGS)
+def test_project_fields_are_actually_counted_as_compared(
+    slug, forward, plant_schema
+):
+    """``fields_compared`` must grow by the project's own fields.
+
+    Otherwise a future regression could stop comparing project fields and
+    ``verified_something`` would not notice.
+    """
+    project_dir = forward(slug)
+    produced = reverse_migration.reverse_migrate_tracker(project_dir, plant_schema)
+    record, _order = reverse_migration.read_project_record(project_dir)
+
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    plants_only = sum(
+        len(p) for p in produced["plants"]
+    )
+    assert report.fields_compared == plants_only + len(record)
+    assert report.records_compared == len(produced["plants"]) + 1
+
+
+def test_markdown_only_fields_leaking_into_the_tracker_are_flagged(
+    forward, plant_schema
+):
+    """``plant_order``/``auto_create`` are never tracker.json fields."""
+    project_dir = forward("lantz")
+    produced = _clean(project_dir, plant_schema)
+    produced["plant_order"] = ["Ltz01"]
+    report = reverse_migration.verify_reverse_migration(
+        project_dir, produced, plant_schema
+    )
+    assert not report.ok
+    assert "plant_order" in report.illegal_fields[PROJECT_ID]
+
+
+def test_cli_second_apply_without_overwrite_is_a_clean_refusal(forward, capsys):
+    """No raw traceback for an expected refusal.
+
+    Re-running --apply against an existing tracker.json is an ordinary
+    operator mistake during a rehearsal. It used to escape as an uncaught
+    ReverseMigrationError traceback while the verification-failure path
+    printed a tidy 'REFUSING TO WRITE' and exited 1; both must behave alike.
+    """
+    project_dir = forward("lantz")
+    argv = [
+        "lantz",
+        "--breeding-root", str(project_dir.parent),
+        "--registry", str(REGISTRY),
+        "--template", str(PLANT_TEMPLATE),
+        "--apply",
+    ]
+    assert rmp.main(argv) == 0
+    target = project_dir / "tracker.json"
+    first = target.read_bytes()
+    capsys.readouterr()
+
+    exit_code = rmp.main(argv)
+
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "REFUSING TO WRITE" in out
+    assert target.read_bytes() == first, "the refused run still rewrote the file"
+
+
+def test_cli_reports_a_corrupted_project_field(forward, capsys, monkeypatch):
+    """A project-level discrepancy must reach the operator's screen."""
+    project_dir = forward("lantz")
+    real = reverse_migration.reverse_migrate_tracker
+
+    def _corrupting(directory, schema):
+        tracker = real(directory, schema)
+        tracker["cross_name"] = "GARBAGE"
+        return tracker
+
+    monkeypatch.setattr(
+        reverse_migration, "reverse_migrate_tracker", _corrupting
+    )
+    exit_code = rmp.main(
+        [
+            "lantz",
+            "--breeding-root", str(project_dir.parent),
+            "--registry", str(REGISTRY),
+            "--template", str(PLANT_TEMPLATE),
+            "--apply",
+        ]
+    )
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "FAILED" in out
+    assert "cross_name" in out
+    assert not (project_dir / "tracker.json").exists()
+
+
+# ------------------------------- top-level key fidelity (GAP 2, measured) ---
+#
+# The round-trip's top-level key set is NOT exactly equal to the original
+# tracker.json's for all six projects, and cannot be made so from the markdown
+# alone. Proof, from the live corpus:
+#
+#     lantz/project.md contains  `genetics: null`  and  `google_sheet_id: null`
+#
+# Byte-identical declarations, identical template defaults (both null) -- yet
+# `google_sheet_id` IS a key of lantz's real tracker.json and `genetics` is
+# NOT. No function of project.md can separate them, because the distinguishing
+# information was destroyed EARLIER, by the forward migration:
+# `tracker_migration._apply_defaults` materialises every template-declared
+# field into project.md whether or not the source tracker had it. By the time
+# a reverse migration reads the file, "absent from the tracker" and "present
+# and null" look the same.
+#
+# `read_project_record` already restricts to the file's own keys (via
+# `_restrict_to_present`, same as the plant side) -- that is not the defect.
+# The residue is upstream and is a genuine, if minor, rollback-fidelity bug:
+# the rolled-back tracker.json gains null-valued keys the pre-cutover file
+# lacked. Fixing it means changing what the forward migration writes into
+# every live project.md, which is out of this change's scope.
+#
+# So this test pins the EXACT measured deviation rather than asserting a
+# one-directional subset (which would hide any new drift) or exact equality
+# (which would be a known-failing assertion). Zero keys may be LOST in any
+# project, and only these precise, null-valued extras may be gained.
+
+#: The exact spurious top-level keys each project's round trip adds, all of
+#: them template defaults materialised by the forward migration. Any change
+#: to this map is a real behavioural change and must be justified.
+KNOWN_MATERIALISED_EXTRAS = {
+    "lantz": {"breeder_lineage", "genetics"},
+    "spaced-paste": {"breeder_lineage", "genetics"},
+    "honey-badger-haze-pheno-hunt": set(),
+    "kibungan-pheno-hunt": set(),
+    "paloma-coma": set(),
+    "mule-fuel-x-nana-glue": {"breeder_lineage", "genetics", "notes_meta"},
+}
+
+
+@pytest.mark.parametrize("slug", ALL_SLUGS)
+def test_round_trip_top_level_keys_lose_nothing_and_add_only_known_defaults(
+    slug, forward, plant_schema
+):
+    produced = reverse_migration.reverse_migrate_tracker(
+        forward(slug), plant_schema
+    )
+    original = _live_tracker(slug)
+
+    lost = set(original) - set(produced)
+    assert not lost, f"{slug}: top-level keys LOST: {sorted(lost)}"
+
+    gained = set(produced) - set(original)
+    assert gained == KNOWN_MATERIALISED_EXTRAS[slug], (
+        f"{slug}: top-level key drift -- expected extras "
+        f"{sorted(KNOWN_MATERIALISED_EXTRAS[slug])}, got {sorted(gained)}"
+    )
+
+
+@pytest.mark.parametrize("slug", ALL_SLUGS)
+def test_every_gained_top_level_key_is_an_empty_template_default(
+    slug, forward, plant_schema
+):
+    """The extras must be inert defaults, never invented CONTENT.
+
+    A materialised `genetics: null` is a cosmetic blemish on a rolled-back
+    file. A materialised key carrying a real-looking value would be fabricated
+    data, which is a different and far more serious thing.
+    """
+    produced = reverse_migration.reverse_migrate_tracker(
+        forward(slug), plant_schema
+    )
+    schema = project_markdown.load_schema(PROJECT_TEMPLATE)
+    for key in KNOWN_MATERIALISED_EXTRAS[slug]:
+        assert produced[key] in (None, {}, [], ""), (
+            f"{slug}: gained key {key!r} carries invented content "
+            f"{produced[key]!r}"
+        )
+        assert produced[key] == schema[key]["default"]
+
+
+@pytest.mark.parametrize("slug", ALL_SLUGS)
+def test_round_trip_preserves_every_original_top_level_value(
+    slug, forward, plant_schema
+):
+    """Not just the keys -- every original top-level VALUE must survive."""
+    produced = reverse_migration.reverse_migrate_tracker(
+        forward(slug), plant_schema
+    )
+    original = _live_tracker(slug)
+    for field, value in original.items():
+        if field == "plants":
+            continue
+        assert produced[field] == value, f"{slug}.{field} changed"

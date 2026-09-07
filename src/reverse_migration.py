@@ -63,6 +63,7 @@ __all__ = [
     "ReverseMigrationError",
     "ReverseVerificationReport",
     "ORDER_KEY",
+    "PROJECT_RECORD_ID",
     "MARKDOWN_ONLY_PROJECT_FIELDS",
     "read_project_record",
     "read_plant_records",
@@ -72,6 +73,13 @@ __all__ = [
 
 PROJECT_FILE = "project.md"
 PLANTS_DIR = "plants"
+
+#: Synthetic record id under which the PROJECT's own top-level fields are
+#: reported in a :class:`ReverseVerificationReport`. Plants are keyed by their
+#: real plant id; the project is not a plant and has no id of its own, so it
+#: needs a name that no plant file can ever collide with (a plant id is a
+#: filename stem, and ``__project__`` is not a legal one here).
+PROJECT_RECORD_ID = "__project__"
 
 #: ``markdown_backend``'s own name for the ordering key it writes into
 #: ``project.md``. Matched here so the reverse migration strips exactly the
@@ -387,6 +395,53 @@ def _unrepresented_observations(
     )
 
 
+def _verify_project_record(
+    expected: Mapping[str, Any],
+    produced_tracker: Mapping[str, Any],
+    report: ReverseVerificationReport,
+) -> None:
+    """Diff the produced tracker's TOP-LEVEL fields against ``project.md``.
+
+    Reported under :data:`PROJECT_RECORD_ID` in the very same containers the
+    plants use, so ``ReverseVerificationReport.ok`` -- which already returns
+    False for any non-empty ``lost_fields``/``changed_fields``/
+    ``illegal_fields`` -- needs no new boolean logic to cover the project.
+
+    Three directions are checked, because each is a distinct real failure:
+
+    * a field the markdown HAS and the tracker LACKS is ``lost``;
+    * a field both have but with different values is ``changed`` (this is
+      what catches a garbage ``cross_name``, a nulled ``github_repo``, or a
+      ``drive_folders`` dict retyped to a string);
+    * a top-level key the markdown never had is ``illegal`` -- an invented
+      field is data corruption in a rollback artifact just as much as a
+      missing one, and ``plants`` aside, nothing may appear from nowhere.
+
+    ``records_compared`` counts the project as one record and
+    ``fields_compared`` counts each of its fields, exactly as for a plant, so
+    ``verified_something`` stays an honest measure of what was checked.
+    """
+    report.records_compared += 1
+    for field, value in expected.items():
+        report.fields_compared += 1
+        if field not in produced_tracker:
+            report.lost_fields.setdefault(PROJECT_RECORD_ID, []).append(field)
+        elif produced_tracker[field] != value:
+            report.changed_fields.setdefault(PROJECT_RECORD_ID, []).append(
+                {
+                    "field": field,
+                    "expected": value,
+                    "got": produced_tracker[field],
+                }
+            )
+
+    # `plants` is the array this function's caller verifies element by
+    # element; it is legitimately present and is not a project field.
+    for field in produced_tracker:
+        if field != PLANTS_KEY and field not in expected:
+            report.illegal_fields.setdefault(PROJECT_RECORD_ID, []).append(field)
+
+
 def verify_reverse_migration(
     markdown_dir: str | Path,
     produced_tracker: Mapping[str, Any],
@@ -402,6 +457,15 @@ def verify_reverse_migration(
     tracker, under the tracker's ``id`` spelling. Fields the tracker has that
     the markdown does not are reported as changes/extras, not ignored, because
     in this direction the markdown is the source of truth.
+
+    BOTH halves of the tracker are checked: the ``plants`` array AND the
+    project's own top-level fields. Checking only the plants was the original
+    defect here -- it let ``cross_name``, ``google_sheet_id``,
+    ``drive_folders`` and friends be corrupted, dropped, retyped or invented
+    while the report still said ``ok``. Plan step 7c's "if the diff shows any
+    discrepancy, STOP" is scoped to the whole ``tracker.json``, so the project
+    record is diffed under the synthetic id :data:`PROJECT_RECORD_ID` using
+    the same lost/changed/illegal containers as the plants.
     """
     markdown_dir = Path(markdown_dir)
     report = ReverseVerificationReport()
@@ -423,7 +487,8 @@ def verify_reverse_migration(
 
     order = []
     if (markdown_dir / PROJECT_FILE).is_file():
-        _record, order = read_project_record(markdown_dir)
+        expected_project, order = read_project_record(markdown_dir)
+        _verify_project_record(expected_project, produced_tracker, report)
 
     paths = _plant_path_order(markdown_dir, order)
     report.plant_count_markdown = len(paths)
