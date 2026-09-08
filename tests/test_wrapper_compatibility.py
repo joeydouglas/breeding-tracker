@@ -70,13 +70,16 @@ WRAPPER_SHA256 = {
     "kibungan-pheno-hunt":
         "2768b6fefe7cf3246c7388e4765c5bddc6cc55c5fe6b3b363dc367273de19dc5",
     "lantz":
-        "89af983a8f1131129b9812b6340cce0b6a903006ca2098675e687fafff57cc3e",
+        # NICK-1058: AUTO_CREATE flipped False->True for all 9 projects.
+        "d39687c7b0921cbf986485258f36422df48e38c9685dd2cbf90ab81074526a93",
     "mule-fuel-x-nana-glue":
-        "f85d193137e6d3cb5588e495943beb83f297b37dfb0fff88796bcc233b61c4f3",
+        # NICK-1058: AUTO_CREATE flipped False->True for all 9 projects.
+        "47c0de2e0de0f2f84ae38657ff3e6581d5f0a3b863b2857da422cfa642c1f9a6",
     "paloma-coma":
         "d45b51f592ea8170a64103433dc9878ac8cb5981dd9eaf94e72d2ccdc9b2aa47",
     "spaced-paste":
-        "7f2dc750ec26252bb602d912291ec9cd2e74075436c6de104f5cad08e19d2e7b",
+        # NICK-1058: AUTO_CREATE flipped False->True for all 9 projects.
+        "2b60d2aae9503c3c9fbf482f924b5e7077d9e83aeaf6ec21ad1e7b1effe10de0",
 }
 
 PROJECTS = sorted(WRAPPER_SHA256)

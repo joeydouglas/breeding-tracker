@@ -53,7 +53,7 @@ CONFIG = {
     'GITHUB_REPO': GITHUB_REPO,
     'DISABLE_GITHUB_PUSH': DISABLE_GITHUB_PUSH,
     'CROSS_NAME': 'Lantz',
-    'AUTO_CREATE': False,  # doc-imported pre-populated roster; missing ID is an error
+    'AUTO_CREATE': True,  # NICK-1058: auto-create enabled for all projects
     # STORAGE BACKEND (NICK-949). Declared EXPLICITLY, even though
     # 'markdown' is also breeding_core's default, so that a future reader
     # can see the key that a rollback flips ('json' restores the

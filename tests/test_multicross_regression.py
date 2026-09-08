@@ -625,20 +625,17 @@ def test_every_observation_is_appended_to_its_plants_log(project, replay):
 
 
 def test_the_fixture_comparison_is_not_vacuous(replay):
-    """Guard the skips above: exactly the three pheno hunts must auto-create,
-    so the byte-for-byte fixture comparison always runs on three projects. If
-    a config change made every project a fixed roster, that comparison would
-    silently become zero assertions."""
+    """Guard the skips above: NICK-1058 flipped AUTO_CREATE on for every one
+    of the 6 projects this suite replays, so the byte-for-byte fixture
+    comparison for a fixed-roster "not found" branch no longer runs on any
+    of them -- this test now instead confirms all 6 auto-create, so a config
+    regression that silently turned one back off would be caught."""
     auto = {
         project
         for project in PROJECTS
         if replay[project]["wrapper"].CONFIG.get("AUTO_CREATE")
     }
-    assert auto == {
-        "honey-badger-haze-pheno-hunt",
-        "kibungan-pheno-hunt",
-        "paloma-coma",
-    }
+    assert auto == set(PROJECTS)
 
 
 def test_every_project_replayed_the_whole_fixture(replay):

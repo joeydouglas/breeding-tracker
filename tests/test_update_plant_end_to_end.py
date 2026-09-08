@@ -183,9 +183,17 @@ def test_update_plant_return_value_is_unchanged(tmp_path, monkeypatch):
 
 
 def test_missing_plant_still_returns_the_not_found_string(tmp_path, monkeypatch):
+    """breeding_core's "not found" branch (AUTO_CREATE=False) must still work.
+
+    NICK-1058 flipped AUTO_CREATE to True for every live project, so no real
+    wrapper exercises this branch anymore -- the CONFIG is monkeypatched back
+    to False here specifically to keep covering that branch of
+    breeding_core.update_plant() rather than deleting the test.
+    """
     project = "lantz" if "lantz" in PROJECTS else PROJECTS[0]
     sandbox, _ = _seed_sandbox(project, tmp_path)
     wrapper = _load_wrapper(project, sandbox, monkeypatch)
+    monkeypatch.setitem(wrapper.CONFIG, "AUTO_CREATE", False)
 
     observation = breeding_core.parse_observation("nothing here")
     assert wrapper.update_plant("ZZ99", observation) == "\u274c Plant ZZ99 not found"
