@@ -6,7 +6,7 @@
 plant_id:
   type: string
   default: null
-  description: "REVISION 3 (NICK-966, Joey's decision recorded on NICK-701 2026-09-07): RENAMED from 'id' to 'plant_id', the canonical ID key for the markdown format. tracker.json's own native key remains 'id' -- json_backend must reproduce that format byte-for-byte for a NICK-949 rollback -- so tracker_migration renames on the way out (see SOURCE_PLANT_ID_KEY / CANONICAL_PLANT_ID_KEY). Plant identifier, e.g. Ltz01, PK03. Prefix comes from the owning project's plant-ID prefix regex."
+  description: "REVISION 3 (NICK-966, Joey's decision recorded on NICK-701 2026-09-07): RENAMED from 'id' to 'plant_id', the canonical ID key for the markdown format. tracker.json's own native key remains 'id' -- json_backend must reproduce that format byte-for-byte for a NICK-949 rollback -- so tracker_migration renames on the way out (see SOURCE_PLANT_ID_KEY / CANONICAL_PLANT_ID_KEY). Plant identifier, e.g. LTZ01, PK03. REVISION 4 (NICK-1036, Joey's decision 2026-09-08): plant-ID prefixes are always UPPERCASE (e.g. 'LTZ' and 'SP', not 'Ltz'/'sp') across the template, all live plant files, and every dashboard. Prefix comes from the owning project's plant-ID prefix regex."
 cross:
   type: string
   default: null
