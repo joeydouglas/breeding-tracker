@@ -222,4 +222,6 @@ def test_registry_json_now_matches_the_unified_gateway_pattern_for_all_six():
                 f"{gateway_by_prefix[prefix]!r}"
             )
             checked += 1
-    assert checked == 7, f"expected 7 prefix entries (6 projects, Kibungan has 2), got {checked}"
+    assert checked == 10, (
+        f"expected 10 prefix entries (9 projects, Kibungan has 2), got {checked}"
+    )

@@ -44,6 +44,9 @@ OBSERVATION_TEXT = {
     "mule-fuel-x-nana-glue": "{pid} vigor 8, fuel and citrus, keeper",
     "paloma-coma": "{pid} vigor 8, fuel and citrus, keeper",
     "spaced-paste": "{pid} vigor 8, fuel and citrus, keeper",
+    "marshmallow-og-pheno-hunt": "{pid} vigor 8, fuel and citrus, keeper",
+    "pink-perfume-pheno-hunt": "{pid} vigor 8, fuel and citrus, keeper",
+    "ms-universe-pheno-hunt": "{pid} vigor 8, fuel and citrus, keeper",
 }
 
 

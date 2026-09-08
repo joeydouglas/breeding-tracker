@@ -65,6 +65,9 @@ EXPECTED_PREFIXES = {
     "spaced-paste": ["SP"],
     "paloma-coma": ["PC"],
     "lantz": ["LTZ"],
+    "marshmallow-og-pheno-hunt": ["MOG"],
+    "pink-perfume-pheno-hunt": ["PP"],
+    "ms-universe-pheno-hunt": ["MSU"],
 }
 
 
