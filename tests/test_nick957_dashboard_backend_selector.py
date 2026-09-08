@@ -14,8 +14,8 @@ against a real observation (Joey hit exactly this on mule-fuel: NICK-981).
 Reproduced live before this fix (see the NICK-957 code-review comment on
 Multica): Lantz's ``tracker.json`` (``last_updated: 2026-08-25``) does not
 contain either of two real observations posted through the live pipeline on
-2026-09-07 ("vigor 8" and "recovering nicely"), while ``plants/Ltz01.md`` and
-``plants/Ltz03.md`` do.
+2026-09-07 ("vigor 8" and "recovering nicely"), while ``plants/LTZ01.md`` and
+``plants/LTZ03.md`` do.
 
 THE FIX. Each project's ``generate_dashboard.py`` now loads through that
 SAME project's own ``monitor_breeding_notes.load_tracker()`` (which already
@@ -107,7 +107,7 @@ def test_dashboard_load_tracker_sees_markdown_only_data_not_just_stale_json(sand
         sys.path.insert(0, str(markdown_src))
     import plant_markdown
 
-    plant_path = sandbox / "plants" / "Ltz01.md"
+    plant_path = sandbox / "plants" / "LTZ01.md"
     schema = plant_markdown.load_schema(
         MONITOR_CORE_DIR.parent / "breeding-markdown" / "templates" / "plant-template.md"
     )
@@ -117,7 +117,7 @@ def test_dashboard_load_tracker_sees_markdown_only_data_not_just_stale_json(sand
     plant_markdown.write_plant(plant_path, plant, schema=schema)
 
     tracker = dashboard.load_tracker()
-    lt01 = next(p for p in tracker["plants"] if plant_record.plant_id_of(p) == "Ltz01")
+    lt01 = next(p for p in tracker["plants"] if plant_record.plant_id_of(p) == "LTZ01")
     assert marker in (lt01.get("observation_log") or ""), (
         "generate_dashboard.load_tracker() did not see a markdown-only "
         "observation -- it is still reading stale tracker.json directly"
@@ -138,6 +138,6 @@ def test_generate_all_runs_end_to_end_against_real_markdown_data(sandboxed_lantz
     sandbox, _, dashboard = sandboxed_lantz
     dashboard.generate_all()
     index_html = (sandbox / "dashboard" / "index.html").read_text(encoding="utf-8")
-    assert "Ltz01" in index_html
-    plant_page = sandbox / "dashboard" / "plants" / "Ltz01.html"
+    assert "LTZ01" in index_html
+    plant_page = sandbox / "dashboard" / "plants" / "LTZ01.html"
     assert plant_page.exists()

@@ -70,13 +70,13 @@ WRAPPER_SHA256 = {
     "kibungan-pheno-hunt":
         "2768b6fefe7cf3246c7388e4765c5bddc6cc55c5fe6b3b363dc367273de19dc5",
     "lantz":
-        "4a2daaf80db241b0755dc8241f6783303ca46071554a9989a16ac40cb42c3b32",
+        "89af983a8f1131129b9812b6340cce0b6a903006ca2098675e687fafff57cc3e",
     "mule-fuel-x-nana-glue":
         "f85d193137e6d3cb5588e495943beb83f297b37dfb0fff88796bcc233b61c4f3",
     "paloma-coma":
         "d45b51f592ea8170a64103433dc9878ac8cb5981dd9eaf94e72d2ccdc9b2aa47",
     "spaced-paste":
-        "4b5afccc8c58b7af61c96b4a3fd6a932f95583f42b8305ffade87a68bc5a5933",
+        "7f2dc750ec26252bb602d912291ec9cd2e74075436c6de104f5cad08e19d2e7b",
 }
 
 PROJECTS = sorted(WRAPPER_SHA256)

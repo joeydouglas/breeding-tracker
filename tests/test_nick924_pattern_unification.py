@@ -76,8 +76,8 @@ if str(MONITOR_CORE_DIR) not in sys.path:
 # reference this fix widens the other five to match.
 SINGLE_PREFIX_PROJECTS = {
     "mule-fuel-x-nana-glue": "MG",
-    "lantz": "Ltz",
-    "spaced-paste": "sp",
+    "lantz": "LTZ",
+    "spaced-paste": "SP",
     "paloma-coma": "PC",
     "honey-badger-haze-pheno-hunt": "HBH",
 }
@@ -165,8 +165,8 @@ def test_wrapper_pattern_is_a_strict_superset_of_the_old_behavior(project, prefi
     same match, for every message the OLD narrower pattern already handled."""
     OLD_PATTERNS = {
         "MG": r"\bMG[\s\-]?(\d{1,2})\b",
-        "Ltz": r"\bLtz[\s\-]?(\d{1,2})\b",
-        "sp": r"\bsp[\s\-]?(\d{1,2})\b",
+        "LTZ": r"\bLtz[\s\-]?(\d{1,2})\b",
+        "SP": r"\bsp[\s\-]?(\d{1,2})\b",
         "PC": r"\bPC[\s\-]?(\d{1,2})\b",
         "HBH": r"\bHBH[\s\-]?(\d{1,2})\b",
     }

@@ -62,9 +62,9 @@ EXPECTED_PREFIXES = {
     "mule-fuel-x-nana-glue": ["MG"],
     "honey-badger-haze-pheno-hunt": ["HBH"],
     "kibungan-pheno-hunt": ["PK", "PL"],
-    "spaced-paste": ["sp"],
+    "spaced-paste": ["SP"],
     "paloma-coma": ["PC"],
-    "lantz": ["Ltz"],
+    "lantz": ["LTZ"],
 }
 
 
@@ -272,8 +272,8 @@ def test_registry_breeding_dir_matches_the_wrappers_default(project):
     "text,slug,ids",
     [
         ("MG15 looking fire, vigor 9", "mule-fuel-x-nana-glue", ["MG15"]),
-        ("Ltz07 culled", "lantz", ["Ltz07"]),
-        ("sp 5 frosty", "spaced-paste", ["sp05"]),
+        ("Ltz07 culled", "lantz", ["LTZ07"]),
+        ("sp 5 frosty", "spaced-paste", ["SP05"]),
         ("PC12 keeper", "paloma-coma", ["PC12"]),
         ("HBH-3 stretchy", "honey-badger-haze-pheno-hunt", ["HBH03"]),
         ("PK7 and PL3 both fuel", "kibungan-pheno-hunt", ["PK07", "PL03"]),

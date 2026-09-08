@@ -45,7 +45,7 @@ GITHUB_REPO = os.environ.get('BREEDING_GITHUB_REPO', 'joeydouglas/spaced-paste-b
 # Case-insensitivity is applied by the caller (extract_plant_ids_single
 # always passes re.IGNORECASE), matching the gateway's own (?i).
 PLANT_ID_PATTERN = r'(?i)(?<![A-Z0-9])sp\s*[-#]?\s*0*(\d{1,3})(?!\d)'
-PLANT_ID_PREFIX = 'sp'
+PLANT_ID_PREFIX = 'SP'
 
 CONFIG = {
     'BREEDING_DIR': BREEDING_DIR,

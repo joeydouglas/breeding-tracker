@@ -45,7 +45,7 @@ GITHUB_REPO = os.environ.get('BREEDING_GITHUB_REPO', 'joeydouglas/lantz-breeding
 # Case-insensitivity is applied by the caller (extract_plant_ids_single
 # always passes re.IGNORECASE), matching the gateway's own (?i).
 PLANT_ID_PATTERN = r'(?i)(?<![A-Z0-9])Ltz\s*[-#]?\s*0*(\d{1,3})(?!\d)'
-PLANT_ID_PREFIX = 'Ltz'
+PLANT_ID_PREFIX = 'LTZ'
 
 CONFIG = {
     'BREEDING_DIR': BREEDING_DIR,
