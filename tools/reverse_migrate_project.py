@@ -50,18 +50,17 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-import plant_markdown  # noqa: E402
-import reverse_migration  # noqa: E402
-import tracker_migration  # noqa: E402
+from breeding_tracker import plant_markdown  # noqa: E402
+from breeding_tracker import reverse_migration  # noqa: E402
+from breeding_tracker import tracker_migration  # noqa: E402
 
-from reverse_migration import ReverseMigrationError  # noqa: E402,F401
+from breeding_tracker.reverse_migration import ReverseMigrationError  # noqa: E402,F401
 
 DEFAULT_REGISTRY = (
     Path.home() / ".hermes" / "breeding" / "_shared" / "breeding-meta" / "registry.json"
 )
-DEFAULT_TEMPLATE = _REPO_ROOT / "templates" / "plant-template.md"
+DEFAULT_TEMPLATE = _REPO_ROOT / "breeding_tracker" / "templates" / "plant-template.md"
 DEFAULT_BREEDING_ROOT = Path.home() / ".hermes" / "breeding"
 
 TRACKER_FILENAME = "tracker.json"

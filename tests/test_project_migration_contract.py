@@ -36,9 +36,9 @@ from helpers_migration import (  # noqa: F401  (fixture re-export)
     sibling_prefixes as _sibling_prefixes,
     tracker_json as _tracker_json,
 )
-from migration_harness import live_tree_state
-from migration_specs import PROJECT_SPECS
-from tracker_migration import (
+from breeding_tracker.migration_harness import live_tree_state
+from breeding_tracker.migration_specs import PROJECT_SPECS
+from breeding_tracker.tracker_migration import (
     SandboxViolationError,
     file_md5,
     migrate_tracker,
@@ -166,7 +166,7 @@ def test_every_inventoried_plant_field_survives_on_every_plant(
     spec, tmp_path, no_side_effects
 ):
     """Field-level diff against Task 3.0's inventory, not a hand-picked subset."""
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     _, out = _migrate(spec, tmp_path)
     schema = load_schema(PLANT_TEMPLATE)
@@ -227,7 +227,7 @@ def test_fields_null_on_every_plant_are_written_as_explicit_yaml_nulls(
     fields = _always_null_plant_fields(spec)
     assert fields, "no always-null plant field -- the check would be vacuous"
 
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     schema = load_schema(PLANT_TEMPLATE)
     for plant in _tracker_json(spec)["plants"]:
@@ -248,7 +248,7 @@ def test_the_whole_plants_array_reconstructs_from_markdown(
     spec, tmp_path, no_side_effects
 ):
     """The strongest form of (b): rebuild the source array and JSON-compare."""
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     _, out = _migrate(spec, tmp_path)
     schema = load_schema(PLANT_TEMPLATE)
@@ -273,7 +273,7 @@ def test_the_whole_plants_array_reconstructs_from_markdown(
 
 @spec_param
 def test_every_project_field_survives(spec, tmp_path, no_side_effects):
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = _migrate(spec, tmp_path)
     source = _tracker_json(spec)
@@ -289,7 +289,7 @@ def test_every_project_field_survives(spec, tmp_path, no_side_effects):
 def test_plants_array_is_not_duplicated_into_project_frontmatter(
     spec, tmp_path, no_side_effects
 ):
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = _migrate(spec, tmp_path)
     got = read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
@@ -352,7 +352,7 @@ def test_only_the_known_incomplete_plants_needed_photo_defaults(
 @spec_param
 def test_registry_sourced_routing_fields_are_correct(spec, tmp_path, no_side_effects):
     """Task 3.0 §8's highest-risk finding: these live ONLY in registry.json."""
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = _migrate(spec, tmp_path)
     got = read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
@@ -367,7 +367,7 @@ def test_registry_sourced_routing_fields_are_correct(spec, tmp_path, no_side_eff
 @spec_param
 def test_id_routing_regexes_survive_backslash_intact(spec, tmp_path, no_side_effects):
     """A YAML round-trip that ate a backslash would silently break ID routing."""
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = _migrate(spec, tmp_path)
     got = read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
@@ -400,9 +400,9 @@ def test_the_migrated_patterns_still_route_this_projects_real_plant_ids(
     one pattern per ID; and across projects, no collision with any sibling in
     `registry.json`. Everything compiles with the flags production uses.
     """
-    from migration_harness import routing_failures
+    from breeding_tracker.migration_harness import routing_failures
 
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = _migrate(spec, tmp_path)
     prefixes = read_project(
@@ -430,9 +430,9 @@ def test_the_migrated_patterns_route_every_separator_their_source_declared(
     point, so the migrated pattern is held to the separators the SOURCE
     declared.
     """
-    from migration_harness import declared_separators, routing_failures
+    from breeding_tracker.migration_harness import declared_separators, routing_failures
 
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = _migrate(spec, tmp_path)
     prefixes = read_project(
@@ -476,9 +476,9 @@ def test_a_sibling_project_duplicating_this_prefix_is_reported(
     the only one it could never report. Asserted on this project's real
     prefixes against a synthetic twin.
     """
-    from migration_harness import routing_failures
+    from breeding_tracker.migration_harness import routing_failures
 
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = _migrate(spec, tmp_path)
     prefixes = read_project(
@@ -515,9 +515,9 @@ def test_the_migrated_patterns_do_not_collide_with_any_sibling_project(
     the check is vacuous) and a deliberately widened copy of this project's
     own pattern is confirmed to be caught.
     """
-    from migration_harness import routing_failures
+    from breeding_tracker.migration_harness import routing_failures
 
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = _migrate(spec, tmp_path)
     prefixes = read_project(
@@ -566,9 +566,9 @@ def test_the_migrated_patterns_route_ids_embedded_in_free_text(
     """
     import re
 
-    from migration_harness import ROUTING_FLAGS, ROUTING_SEPARATORS, routing_failures
+    from breeding_tracker.migration_harness import ROUTING_FLAGS, ROUTING_SEPARATORS, routing_failures
 
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = _migrate(spec, tmp_path)
     prefixes = read_project(
@@ -610,7 +610,7 @@ def test_verification_rejects_routing_fields_reverted_to_template_defaults(
     the template defaults (false / []) would pass while breaking ID routing."""
     import re
 
-    from project_markdown import load_schema
+    from breeding_tracker.project_markdown import load_schema
 
     _, out = _migrate(spec, tmp_path)
     entry = _registry_entry(spec)
@@ -665,7 +665,7 @@ def test_migration_aborts_when_the_registry_entry_is_missing(
 ):
     """Silently taking the template defaults here is the failure mode Task 3.0
     §8 called the migration's highest risk; it must be a hard error."""
-    from tracker_migration import TrackerMigrationError
+    from breeding_tracker.tracker_migration import TrackerMigrationError
 
     stripped = json.loads(spec.registry.read_text(encoding="utf-8"))
     stripped["projects"] = [
@@ -816,7 +816,7 @@ def test_the_migration_module_cannot_reach_the_network_or_a_shell():
 
     Not parametrized: it is a property of the module, not of a project.
     """
-    source = (REPO / "src" / "tracker_migration.py").read_text(encoding="utf-8")
+    source = (REPO / "breeding_tracker" / "tracker_migration.py").read_text(encoding="utf-8")
     for forbidden in (
         "import subprocess",
         "import socket",

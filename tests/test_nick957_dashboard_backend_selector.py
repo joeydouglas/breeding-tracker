@@ -51,7 +51,7 @@ LANTZ_DIR = BREEDING_ROOT / "lantz"
 if str(MONITOR_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_CORE_DIR))
 
-import plant_record  # noqa: E402
+from breeding_tracker import plant_record  # noqa: E402
 
 
 def _load_module(path: Path, name: str):
@@ -100,17 +100,12 @@ def test_dashboard_load_tracker_sees_markdown_only_data_not_just_stale_json(sand
 
     # Plant an observation directly into the markdown record of truth (what
     # the live pipeline actually does) that is deliberately absent from the
-    # copied, stale tracker.json. Mirrors markdown_backend.py's own
-    # sys.path-insert of the sibling breeding-markdown checkout's src/.
-    markdown_src = MONITOR_CORE_DIR.parent / "breeding-markdown" / "src"
-    if str(markdown_src) not in sys.path:
-        sys.path.insert(0, str(markdown_src))
-    import plant_markdown
+    # copied, stale tracker.json.
+    from breeding_tracker import plant_markdown
+    from breeding_tracker.markdown_backend import _templates_dir
 
     plant_path = sandbox / "plants" / "LTZ01.md"
-    schema = plant_markdown.load_schema(
-        MONITOR_CORE_DIR.parent / "breeding-markdown" / "templates" / "plant-template.md"
-    )
+    schema = plant_markdown.load_schema(_templates_dir() / "plant-template.md")
     plant = plant_markdown.read_plant(plant_path, schema=schema)
     marker = "NICK-957 regression-test observation, unique text xyzzy42"
     plant["observation_log"] = (plant.get("observation_log") or "") + f"\n### marker\n{marker}\n"

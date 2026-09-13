@@ -25,9 +25,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "src"))
 
-from migration_harness import (  # noqa: E402  (needs the sys.path line above)
+from breeding_tracker.migration_harness import (  # noqa: E402  (needs the sys.path line above)
     ROUTING_FLAGS,
     ROUTING_SEPARATORS,
     declared_separators,
@@ -37,18 +36,18 @@ from migration_harness import (  # noqa: E402  (needs the sys.path line above)
     routing_failures,
     unexpected_repo_changes,
 )
-from migration_specs import PROJECT_SPECS, SPECS_BY_SLUG  # noqa: E402
+from breeding_tracker.migration_specs import PROJECT_SPECS, SPECS_BY_SLUG  # noqa: E402
 
-PROJECT_TEMPLATE = REPO / "templates" / "project-template.md"
-PLANT_TEMPLATE = REPO / "templates" / "plant-template.md"
+PROJECT_TEMPLATE = REPO / "breeding_tracker" / "templates" / "project-template.md"
+PLANT_TEMPLATE = REPO / "breeding_tracker" / "templates" / "plant-template.md"
 
 #: The production monitor whose routing behaviour this verifier mirrors.
 #: Read statically (never imported: importing it pulls in the Discord/Drive
 #: machinery this sandbox-only verifier must never touch) so the claim
 #: "compiled with the flags production uses" is checked against production.
-PRODUCTION_CORE = (
-    Path.home() / ".hermes" / "breeding" / "_shared" / "monitor-core" / "breeding_core.py"
-)
+import breeding_tracker.breeding_core as _core_mod
+
+PRODUCTION_CORE = Path(_core_mod.__file__)
 
 
 class Checker:
@@ -81,9 +80,9 @@ def md5sum_via_system(path):
 
 def verify(spec, check, allow_dirty_baseline=False):
     """Every acceptance claim for one project, re-derived from scratch."""
-    import plant_markdown
-    import project_markdown
-    from tracker_migration import (
+    from breeding_tracker import plant_markdown
+    from breeding_tracker import project_markdown
+    from breeding_tracker.tracker_migration import (
         SandboxViolationError,
         migrate_tracker,
         verify_migration,
@@ -671,7 +670,7 @@ def verify(spec, check, allow_dirty_baseline=False):
     )
 
     # --- static proof of no side-effect capability -------------------------
-    module_source = (REPO / "src" / "tracker_migration.py").read_text(encoding="utf-8")
+    module_source = (REPO / "breeding_tracker" / "tracker_migration.py").read_text(encoding="utf-8")
     forbidden = [
         token
         for token in (

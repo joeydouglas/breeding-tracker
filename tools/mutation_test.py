@@ -43,8 +43,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-if str(REPO / "src") not in sys.path:
-    sys.path.insert(0, str(REPO / "src"))
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 #: Env var the plugin half reads. Unset (or empty) means "no mutation", so
 #: `-p mutation_test` is a no-op on an ordinary run and the plugin can sit in
@@ -72,7 +72,7 @@ def _mutant_a(mp):
     byte-identical output. On lantz it destroys the corpus's only
     human-confirmed transcription correction.
     """
-    import tracker_migration as tm
+    from breeding_tracker import tracker_migration as tm
 
     real = tm.build_plant_record
 
@@ -93,7 +93,7 @@ def _mutant_b(mp):
     The mirror of A: a writer that preserved Ltz01's value by inventing one
     everywhere passes any check that only looks at the carrier record.
     """
-    import tracker_migration as tm
+    from breeding_tracker import tracker_migration as tm
 
     real = tm.migrate_tracker
 
@@ -152,7 +152,7 @@ def _mutant_d(mp):
 
 def _patch_filename_case(mp, transform):
     """Rewrite only the stem of the plant file each `write_plant` targets."""
-    import plant_markdown as pmd
+    from breeding_tracker import plant_markdown as pmd
 
     real = pmd.write_plant
 
@@ -171,7 +171,7 @@ def _mutant_k(mp):
     than C does. A suite where C and K kill the same set has a check that is
     only looking at one of the two places an ID lives.
     """
-    import tracker_migration as tm
+    from breeding_tracker import tracker_migration as tm
 
     real = tm._plant_id
     mp.setattr(tm, "_plant_id", lambda plant, index: real(plant, index).upper())
@@ -185,7 +185,7 @@ def _mutant_e(mp):
     later decision in `status`, which must win over anything re-derivable
     from the body.
     """
-    import tracker_migration as tm
+    from breeding_tracker import tracker_migration as tm
 
     real = tm.build_plant_record
 
@@ -207,7 +207,7 @@ def _mutant_f(mp):
     True on 94 of the corpus's 95 plant records, so only lantz's Ltz01 — the
     sole record needing no template default at all — can see it.
     """
-    import tracker_migration as tm
+    from breeding_tracker import tracker_migration as tm
 
     real = tm.build_plant_record
 
@@ -225,7 +225,7 @@ def _mutant_g(mp):
     reports a plausible `None`, so the loss is invisible through the reader
     and visible only in the bytes.
     """
-    import plant_markdown as pmd
+    from breeding_tracker import plant_markdown as pmd
 
     real = pmd.write_plant
 
@@ -246,7 +246,7 @@ def _mutant_h(mp):
     spaced-paste and lantz plant, are the empty string while a sibling field
     is genuinely null — so the two must not be conflated in either direction.
     """
-    import plant_markdown as pmd
+    from breeding_tracker import plant_markdown as pmd
 
     real = pmd.write_plant
 
@@ -267,7 +267,7 @@ def _mutant_i(mp):
     routes the canonical spelling and silently drops the other half of
     Discord's traffic.
     """
-    import migration_harness as mh
+    from breeding_tracker import migration_harness as mh
 
     mp.setattr(mh, "ROUTING_FLAGS", re.NOFLAG)
 
@@ -279,7 +279,7 @@ def _mutant_j(mp):
     live ONLY in `registry.json`. Undetectable on the three projects whose
     registry `auto_create` happens to equal the template default.
     """
-    import tracker_migration as tm
+    from breeding_tracker import tracker_migration as tm
 
     real = tm.build_project_record
 
@@ -390,7 +390,7 @@ def _run_suite(name: str, extra: list[str]) -> tuple[list[str], str]:
         cwd=REPO,
         capture_output=True,
         text=True,
-        env={**env, "PYTHONPATH": os.pathsep.join([str(REPO / "src"), str(REPO / "tools")])},
+        env={**env, "PYTHONPATH": os.pathsep.join([str(REPO), str(REPO / "tools")])},
     )
     failures = [
         m.group(1) for line in proc.stdout.splitlines() if (m := _FAILED.match(line))

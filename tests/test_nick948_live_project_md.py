@@ -19,16 +19,15 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO_ROOT / "src"))
 sys.path.insert(0, str(_REPO_ROOT / "tools"))
 
 import generate_live_project_md as gen  # noqa: E402
-import project_markdown  # noqa: E402
-import tracker_migration  # noqa: E402
+from breeding_tracker import project_markdown  # noqa: E402
+from breeding_tracker import tracker_migration  # noqa: E402
 
 LIVE_ROOT = Path.home() / ".hermes" / "breeding"
 REGISTRY = LIVE_ROOT / "_shared" / "breeding-meta" / "registry.json"
-TEMPLATE = _REPO_ROOT / "templates" / "project-template.md"
+TEMPLATE = _REPO_ROOT / "breeding_tracker" / "templates" / "project-template.md"
 
 ALL_SLUGS = [
     "lantz",
@@ -142,9 +141,7 @@ def test_force_allows_a_deliberate_rewrite(sandbox):
 @pytest.mark.parametrize("slug", ALL_SLUGS)
 def test_generated_file_satisfies_the_live_load_tracker_path(slug, sandbox):
     """The actual bug: ``markdown_backend.load_tracker`` must stop raising."""
-    monitor_core = LIVE_ROOT / "_shared" / "monitor-core"
-    sys.path.insert(0, str(monitor_core))
-    import markdown_backend  # noqa: PLC0415
+    from breeding_tracker import markdown_backend  # noqa: PLC0415
 
     project_dir = sandbox(slug)
     gen.generate(project_dir, REGISTRY, slug, TEMPLATE)

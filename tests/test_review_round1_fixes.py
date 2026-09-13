@@ -19,8 +19,8 @@ MONITOR_CORE_DIR = Path(__file__).resolve().parents[1]
 if str(MONITOR_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_CORE_DIR))
 
-import breeding_core as core  # noqa: E402
-import markdown_backend  # noqa: E402
+from breeding_tracker import breeding_core as core  # noqa: E402
+from breeding_tracker import markdown_backend  # noqa: E402
 
 
 # ----------------------------------------------------------- helpers ------
@@ -230,25 +230,22 @@ def test_idless_plant_in_roster_surfaces_the_informative_validator_error(
 # ------------------------------- MINOR: friendlier missing-repo error -----
 
 
-def test_missing_breeding_markdown_repo_names_the_path_and_the_env_var(
+def test_breeding_markdown_dir_override_redirects_the_templates(
     tmp_path, monkeypatch
 ):
-    """A bare ``ModuleNotFoundError: No module named 'plant_markdown'`` tells
-    an operator nothing about where it looked or how to point it elsewhere."""
-    missing = tmp_path / "definitely-not-here"
-    monkeypatch.setenv("BREEDING_MARKDOWN_DIR", str(missing))
-    for mod in ("plant_markdown", "project_markdown"):
-        monkeypatch.delitem(sys.modules, mod, raising=False)
-    monkeypatch.setattr(
-        sys, "path", [p for p in sys.path if "breeding-markdown" not in p]
-    )
+    """The markdown modules now ship inside this package, so the historical
+    missing-repo ModuleNotFoundError path is gone. What BREEDING_MARKDOWN_DIR
+    still controls is WHICH templates directory the backend reads, and that
+    override must keep working for sandboxes and the data-api container."""
+    override = tmp_path / "alt-checkout"
+    (override / "templates").mkdir(parents=True)
+    monkeypatch.setenv("BREEDING_MARKDOWN_DIR", str(override))
+    assert markdown_backend._templates_dir() == override / "templates"
 
-    with pytest.raises(Exception) as excinfo:
-        markdown_backend._import_markdown_modules()
-
-    message = str(excinfo.value)
-    assert str(missing) in message, "error does not name the searched path"
-    assert "BREEDING_MARKDOWN_DIR" in message, "error does not name the env var"
+    monkeypatch.delenv("BREEDING_MARKDOWN_DIR")
+    default = markdown_backend._templates_dir()
+    assert default.name == "templates"
+    assert (default / "plant-template.md").is_file()
 
 
 # ------------------------- MINOR: id error message must not overstate -----

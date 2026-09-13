@@ -49,12 +49,12 @@ from pathlib import Path
 
 import pytest
 
-import breeding_core as core
+from breeding_tracker import breeding_core as core
 from test_wrapper_compatibility import PROJECTS, WRAPPER_SHA256, _load_wrapper
 
 BREEDING_ROOT = Path.home() / ".hermes" / "breeding"
 MONITOR_CORE_DIR = Path(__file__).resolve().parents[1]
-BREEDING_CORE_PY = MONITOR_CORE_DIR / "breeding_core.py"
+BREEDING_CORE_PY = MONITOR_CORE_DIR / "breeding_tracker" / "breeding_core.py"
 
 # Ground truth read out of the six real wrappers at the start of Task 2.5.
 # registry.json must agree with these or it is not describing reality.

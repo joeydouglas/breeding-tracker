@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from migration_harness import (
+from breeding_tracker.migration_harness import (
     ProjectSpec,
     describe_baseline_dirt,
     fingerprint_tree,

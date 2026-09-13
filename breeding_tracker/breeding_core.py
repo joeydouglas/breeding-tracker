@@ -25,9 +25,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import json_backend
-import markdown_backend
-from plant_record import CANONICAL_ID_KEY, LEGACY_ID_KEY, plant_id_of
+from . import json_backend
+from . import markdown_backend
+from .plant_record import CANONICAL_ID_KEY, LEGACY_ID_KEY, plant_id_of
 
 TERPENE_KEYWORDS = ['fuel', 'gas', 'citrus', 'fruity', 'sweet', 'earthy', 'pine', 'skunky', 'diesel']
 STRUCTURE_KEYWORDS = ['frosty', 'dense', 'sandy', 'sticky', 'purple', 'tight', 'fox.*tail', 'stretch']
@@ -629,7 +629,9 @@ def extract_plant_ids_registry(message_text, registry):
 # they keep working byte-identically off their own CONFIG dicts.
 # ---------------------------------------------------------------------------
 
-_DEFAULT_META_REPO = Path(__file__).resolve().parent.parent / "breeding-meta"
+_DEFAULT_META_REPO = (
+    Path.home() / ".hermes" / "breeding" / "_shared" / "breeding-meta"
+)
 
 REGISTRY_FILENAME = "registry.json"
 SUPPORTED_REGISTRY_SCHEMA = 1

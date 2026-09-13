@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from project_markdown import load_schema, read_project, write_project
+from breeding_tracker.project_markdown import load_schema, read_project, write_project
 
-TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "project-template.md"
+TEMPLATE = Path(__file__).resolve().parents[1] / "breeding_tracker" / "templates" / "project-template.md"
 TRACKERS = sorted(glob.glob("/home/joey/.hermes/breeding/*/tracker.json"))
 
 

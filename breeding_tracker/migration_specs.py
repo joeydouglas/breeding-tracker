@@ -14,7 +14,7 @@ Adding a project:
    exists nowhere else). Do NOT re-add the shared checks.
 """
 
-from migration_harness import ProjectSpec
+from .migration_harness import ProjectSpec
 
 #: The 18 keys carried by every complete plant record, per Task 3.0 §2.
 #: `corrected_reading` is NOT here: it is declared in the plant template and

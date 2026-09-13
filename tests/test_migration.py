@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from migration import (
+from breeding_tracker.migration import (
     MigrationReport,
     MigrationResult,
     apply_new_fields,
@@ -26,10 +26,10 @@ from migration import (
 )
 
 PLANT_TEMPLATE = (
-    Path(__file__).resolve().parents[1] / "templates" / "plant-template.md"
+    Path(__file__).resolve().parents[1] / "breeding_tracker" / "templates" / "plant-template.md"
 )
 PROJECT_TEMPLATE = (
-    Path(__file__).resolve().parents[1] / "templates" / "project-template.md"
+    Path(__file__).resolve().parents[1] / "breeding_tracker" / "templates" / "project-template.md"
 )
 
 
@@ -499,7 +499,7 @@ class TestStateIsPersistedIncrementally:
             {"name": "beta", "path": str(local_b)},
         ]
 
-        import migration as migration_module
+        from breeding_tracker import migration as migration_module
 
         real = migration_module._migrate_one_repo
 
@@ -540,7 +540,7 @@ class TestStateIsPersistedIncrementally:
             {"name": "beta", "path": str(local_b)},
         ]
 
-        import migration as migration_module
+        from breeding_tracker import migration as migration_module
 
         real = migration_module._migrate_one_repo
 
@@ -601,7 +601,7 @@ class TestCommitStrandingIsDetected:
         state = tmp_path / "state.json"
         registry = [{"name": "commitstrand", "path": str(local)}]
 
-        import migration as migration_module
+        from breeding_tracker import migration as migration_module
 
         real_git = migration_module._git
 
@@ -638,7 +638,7 @@ class TestCommitStrandingIsDetected:
         state = tmp_path / "state.json"
         registry = [{"name": "dirtyskip", "path": str(local)}]
 
-        import migration as migration_module
+        from breeding_tracker import migration as migration_module
 
         real_git = migration_module._git
 
@@ -818,7 +818,7 @@ class TestFailureRollsBackAndReportsTouchedPaths:
         state = tmp_path / "state.json"
         registry = [{"name": "rollback", "path": str(local)}]
 
-        import migration as migration_module
+        from breeding_tracker import migration as migration_module
 
         real_git = migration_module._git
 
@@ -850,7 +850,7 @@ class TestFailureRollsBackAndReportsTouchedPaths:
         state = tmp_path / "state.json"
         registry = [{"name": "touched", "path": str(local)}]
 
-        import migration as migration_module
+        from breeding_tracker import migration as migration_module
 
         real_git = migration_module._git
 
@@ -891,7 +891,7 @@ class TestPorcelainStatusParsing:
     ('M  path'), which strip() does not corrupt, was covered before."""
 
     def test_dirty_paths_parses_staged_unstaged_and_untracked_shapes(self):
-        import migration as migration_module
+        from breeding_tracker import migration as migration_module
 
         porcelain = "M  staged.md\n M unstaged.md\n?? plants/untracked.md\n"
         assert migration_module._dirty_paths(porcelain) == [

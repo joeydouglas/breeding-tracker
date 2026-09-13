@@ -33,8 +33,8 @@ MONITOR_CORE_DIR = Path(__file__).resolve().parents[1]
 if str(MONITOR_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_CORE_DIR))
 
-import breeding_core  # noqa: E402
-import markdown_backend  # noqa: E402
+from breeding_tracker import breeding_core  # noqa: E402
+from breeding_tracker import markdown_backend  # noqa: E402
 
 from test_push_to_github import (  # noqa: E402
     REPO,

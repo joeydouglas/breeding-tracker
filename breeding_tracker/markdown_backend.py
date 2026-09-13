@@ -55,44 +55,30 @@ Shape-preservation rules (why this module is more than two one-liners):
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 from pathlib import Path
 
-from plant_record import CANONICAL_ID_KEY, ID_KEYS, plant_id_of
+from .plant_record import CANONICAL_ID_KEY, ID_KEYS, plant_id_of
 
-_DEFAULT_MARKDOWN_REPO = Path(__file__).resolve().parents[1] / "breeding-markdown"
+_DEFAULT_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 
-def _markdown_repo() -> Path:
-    """Locate the breeding-markdown repo.
+def _templates_dir() -> Path:
+    """Locate the markdown templates directory.
 
-    Defaults to the sibling checkout next to ``monitor-core`` (the layout in
-    ``~/.hermes/breeding/_shared/``); ``BREEDING_MARKDOWN_DIR`` overrides it
-    so a sandbox or the data-api container can point somewhere else without a
-    code change.
+    Defaults to the templates shipped inside this package;
+    ``BREEDING_MARKDOWN_DIR`` (pointing at a checkout with a ``templates/``
+    subdirectory) overrides it so a sandbox or the data-api container can
+    point somewhere else without a code change.
     """
     override = os.environ.get("BREEDING_MARKDOWN_DIR")
-    return Path(override).expanduser() if override else _DEFAULT_MARKDOWN_REPO
+    if override:
+        return Path(override).expanduser() / "templates"
+    return _DEFAULT_TEMPLATES_DIR
 
 
 def _import_markdown_modules():
-    repo = _markdown_repo()
-    src = repo / "src"
-    if str(src) not in sys.path:
-        sys.path.insert(0, str(src))
-    try:
-        import plant_markdown
-        import project_markdown
-    except ModuleNotFoundError as exc:
-        # A bare "No module named 'plant_markdown'" tells an operator nothing
-        # about where this looked or how to redirect it. Name both.
-        raise ModuleNotFoundError(
-            f"could not import the Phase 1 breeding-markdown modules from "
-            f"{src} (repo root {repo}). Set the BREEDING_MARKDOWN_DIR "
-            "environment variable to the breeding-markdown checkout if it "
-            f"does not sit next to monitor-core. Original error: {exc}"
-        ) from exc
+    from . import plant_markdown, project_markdown
 
     return project_markdown, plant_markdown
 
@@ -115,7 +101,7 @@ _ALWAYS_PRESENT_PLANT_KEYS = frozenset({"observation_log"})
 
 def _schemas():
     project_markdown, plant_markdown = _import_markdown_modules()
-    templates = _markdown_repo() / "templates"
+    templates = _templates_dir()
     return (
         project_markdown,
         plant_markdown,

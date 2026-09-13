@@ -41,7 +41,7 @@ from helpers_migration import (  # noqa: F401  (fixture re-export)
     no_side_effects,
     tracker_json,
 )
-from migration_specs import PALOMA_COMA as SPEC
+from breeding_tracker.migration_specs import PALOMA_COMA as SPEC
 
 requires_real_data = pytest.mark.skipif(
     not SPEC.tracker.exists(),
@@ -75,13 +75,13 @@ def migrated(tmp_path, no_side_effects):
 
 
 def _plant(out, plant_id):
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     return read_plant(out / "plants" / f"{plant_id}.md", schema=load_schema(PLANT_TEMPLATE))
 
 
 def _project(out):
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     return read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
 

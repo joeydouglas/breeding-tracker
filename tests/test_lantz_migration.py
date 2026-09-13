@@ -55,9 +55,9 @@ from helpers_migration import (  # noqa: F401  (fixture re-export)
     registry_entry,
     tracker_json,
 )
-from migration_specs import LANTZ as SPEC
-from migration_specs import PROJECT_SPECS
-from plant_markdown import BODY_FIELD as PLANT_BODY_FIELD
+from breeding_tracker.migration_specs import LANTZ as SPEC
+from breeding_tracker.migration_specs import PROJECT_SPECS
+from breeding_tracker.plant_markdown import BODY_FIELD as PLANT_BODY_FIELD
 
 requires_real_data = pytest.mark.skipif(
     not SPEC.tracker.exists(),
@@ -95,19 +95,19 @@ def migrated(tmp_path, no_side_effects):
 
 
 def _plant(out, plant_id):
-    from plant_markdown import read_plant
+    from breeding_tracker.plant_markdown import read_plant
 
     return read_plant(out / "plants" / f"{plant_id}.md", schema=_plant_schema())
 
 
 def _plant_schema():
-    from plant_markdown import load_schema
+    from breeding_tracker.plant_markdown import load_schema
 
     return load_schema(PLANT_TEMPLATE)
 
 
 def _project(out):
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     return read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
 
@@ -380,7 +380,7 @@ def test_routing_is_case_insensitive_across_the_mixed_case_prefix(migrated):
     `ROUTING_FLAGS` out of the MIGRATED markdown rather than the registry, so
     this module and the shared contract cannot drift onto different matchers.
     """
-    from migration_harness import ROUTING_FLAGS
+    from breeding_tracker.migration_harness import ROUTING_FLAGS
 
     _, out = migrated
     compiled = re.compile(
@@ -401,7 +401,7 @@ def test_routing_is_case_insensitive_across_the_mixed_case_prefix(migrated):
 
 def test_the_prefix_does_not_fire_inside_ordinary_words(migrated):
     """The `\\b` boundary is what stops a mis-route onto a real plant."""
-    from migration_harness import ROUTING_FLAGS
+    from breeding_tracker.migration_harness import ROUTING_FLAGS
 
     _, out = migrated
     pattern = _project(out)["plant_id_prefixes"][0]["pattern"]

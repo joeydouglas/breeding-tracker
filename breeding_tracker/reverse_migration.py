@@ -50,9 +50,9 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-import plant_markdown
-import project_markdown
-from tracker_migration import (
+from . import plant_markdown
+from . import project_markdown
+from .tracker_migration import (
     CANONICAL_PLANT_ID_KEY,
     PLANT_BODY_FIELD,
     PLANTS_KEY,

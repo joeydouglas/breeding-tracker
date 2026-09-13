@@ -66,20 +66,41 @@ BREEDING_ROOT = Path.home() / ".hermes" / "breeding"
 # recoverable baseline, not just a hash.
 WRAPPER_SHA256 = {
     "honey-badger-haze-pheno-hunt":
-        "29a8a894eb592eb35bf9a6a00abcb4f3cd66977b49886c5fe768465492a8a515",
+        # Re-baselined: wrappers now import the pip-installed breeding-tracker
+        # package instead of sys.path-inserting _shared/monitor-core.
+        "e429026f276eca28203a59d6e68c774cd5509679e40b639df74a15912697b240",
     "kibungan-pheno-hunt":
-        "2768b6fefe7cf3246c7388e4765c5bddc6cc55c5fe6b3b363dc367273de19dc5",
+        # Re-baselined: wrappers now import the pip-installed breeding-tracker
+        # package instead of sys.path-inserting _shared/monitor-core.
+        "d7f0d746572e483f6cb63a86b882d818dd343bd0037e9ac7534aa99f06d7aa03",
     "lantz":
-        # NICK-1058: AUTO_CREATE flipped False->True for all 9 projects.
-        "d39687c7b0921cbf986485258f36422df48e38c9685dd2cbf90ab81074526a93",
+        # Re-baselined: wrappers now import the pip-installed breeding-tracker
+        # package instead of sys.path-inserting _shared/monitor-core.
+        "c3b00ecea5cae4f40b5f07dabdd0e7a28c2a8bbcd0665ef736a26caf09118305",
+    "marshmallow-og-pheno-hunt":
+        # Re-baselined: wrappers now import the pip-installed breeding-tracker
+        # package instead of sys.path-inserting _shared/monitor-core.
+        "62abdff5836139c2709a718c921073516023fb1d69db09ee8a335347290108a9",
+    "ms-universe-pheno-hunt":
+        # Re-baselined: wrappers now import the pip-installed breeding-tracker
+        # package instead of sys.path-inserting _shared/monitor-core.
+        "d4aa4a9e25298b5fcf16c6dd248eec3f233dfce47b68e054a35d92bf94ab22f1",
     "mule-fuel-x-nana-glue":
-        # NICK-1058: AUTO_CREATE flipped False->True for all 9 projects.
-        "47c0de2e0de0f2f84ae38657ff3e6581d5f0a3b863b2857da422cfa642c1f9a6",
+        # Re-baselined: wrappers now import the pip-installed breeding-tracker
+        # package instead of sys.path-inserting _shared/monitor-core.
+        "3bba4c8924f66e10ab2e5ed807e3fd7e9401e23ec7ea333e5b36fed7d764e4c6",
     "paloma-coma":
-        "d45b51f592ea8170a64103433dc9878ac8cb5981dd9eaf94e72d2ccdc9b2aa47",
+        # Re-baselined: wrappers now import the pip-installed breeding-tracker
+        # package instead of sys.path-inserting _shared/monitor-core.
+        "e37c79994472bd60332e592bbcf1da0fe7dd02e14030bc2a4caf43623bde5db5",
+    "pink-perfume-pheno-hunt":
+        # Re-baselined: wrappers now import the pip-installed breeding-tracker
+        # package instead of sys.path-inserting _shared/monitor-core.
+        "d7e514e6f2b26365343d39d9960a4c317c713d42772797822ee0c15c2ddf0c6d",
     "spaced-paste":
-        # NICK-1058: AUTO_CREATE flipped False->True for all 9 projects.
-        "2b60d2aae9503c3c9fbf482f924b5e7077d9e83aeaf6ec21ad1e7b1effe10de0",
+        # Re-baselined: wrappers now import the pip-installed breeding-tracker
+        # package instead of sys.path-inserting _shared/monitor-core.
+        "0d6b0f8924a784a878f21ab1d6a317683a6342e8cc10d75a9d0d2826650f10db",
 }
 
 PROJECTS = sorted(WRAPPER_SHA256)
@@ -230,7 +251,7 @@ def test_no_wrapper_run_touched_a_real_project_directory(tmp_path, monkeypatch):
 
 # ------------------------------------------- tracked recoverable mirror ---
 
-MIRROR_DIR = Path(__file__).resolve().parent.parent / "pre-refactor-backup" / "wrappers-post-nick949"
+MIRROR_DIR = Path(__file__).resolve().parent.parent / "wrappers-mirror"
 
 
 @pytest.mark.parametrize("project", PROJECTS)

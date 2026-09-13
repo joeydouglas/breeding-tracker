@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from project_markdown import (
+from breeding_tracker.project_markdown import (
     DuplicateKeyError,
     MalformedFrontmatterError,
     ProjectMarkdownError,
@@ -32,7 +32,7 @@ from project_markdown import (
     write_project,
 )
 
-TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "project-template.md"
+TEMPLATE = Path(__file__).resolve().parents[1] / "breeding_tracker" / "templates" / "project-template.md"
 
 
 @pytest.fixture()
@@ -669,7 +669,7 @@ class TestSymlinkSizeLimitNotBypassable:
     apparent size while the actual read is unbounded."""
 
     def test_oversized_content_rejected_even_via_capped_read(self, tmp_path, schema):
-        import project_markdown
+        from breeding_tracker import project_markdown
 
         p = tmp_path / "big.md"
         big_body = "x" * (project_markdown.MAX_FILE_BYTES + 100)
@@ -697,12 +697,12 @@ class TestSymlinkSizeLimitNotBypassable:
             "import resource, sys\n"
             "resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024,) * 2)\n"
             "sys.path.insert(0, %r)\n"
-            "import project_markdown\n"
+            "from breeding_tracker import project_markdown\n"
             "try:\n"
             "    project_markdown.read_project(%r)\n"
             "except project_markdown.ProjectMarkdownError:\n"
             "    print('OK')\n"
-            % (str(Path(__file__).resolve().parents[1] / "src"), str(link))
+            % (str(Path(__file__).resolve().parents[1]), str(link))
         )
         proc = subprocess.run(
             [sys.executable, "-c", program],

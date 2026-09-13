@@ -30,7 +30,7 @@ MONITOR_CORE_DIR = Path(__file__).resolve().parents[1]
 if str(MONITOR_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_CORE_DIR))
 
-import breeding_core as core  # noqa: E402
+from breeding_tracker import breeding_core as core  # noqa: E402
 from test_registry_routing import (  # noqa: E402,F401
     _project_entry,
     _write_registry,

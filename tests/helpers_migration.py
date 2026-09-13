@@ -14,15 +14,15 @@ from pathlib import Path
 
 import pytest
 
-from tracker_migration import (
+from breeding_tracker.tracker_migration import (
     CANONICAL_PLANT_ID_KEY,
     SOURCE_PLANT_ID_KEY,
     migrate_tracker,
 )
 
 REPO = Path(__file__).resolve().parents[1]
-PROJECT_TEMPLATE = REPO / "templates" / "project-template.md"
-PLANT_TEMPLATE = REPO / "templates" / "plant-template.md"
+PROJECT_TEMPLATE = REPO / "breeding_tracker" / "templates" / "project-template.md"
+PLANT_TEMPLATE = REPO / "breeding_tracker" / "templates" / "plant-template.md"
 
 
 def tracker_json(spec):

@@ -27,7 +27,7 @@ import json
 
 import pytest
 
-from migration_specs import HONEY_BADGER_HAZE as SPEC
+from breeding_tracker.migration_specs import HONEY_BADGER_HAZE as SPEC
 from helpers_migration import (  # noqa: F401  (fixture re-export)
     PLANT_TEMPLATE,
     PROJECT_TEMPLATE,
@@ -69,7 +69,7 @@ def test_drive_folders_survive_whole_without_the_mule_fuel_reports_subkeys(migra
     """Task 3.0 §4: `reports`/`reports_url` are unique to mule-fuel. This
     project's 8-subkey shape must round-trip exactly, and the migration must
     not invent the sibling project's extra keys."""
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = migrated
     source = tracker_json(SPEC)["drive_folders"]
@@ -96,7 +96,7 @@ def test_notes_meta_is_present_and_survives_verbatim(migrated):
     `plants[]` is empty while 23 plants exist). Migration preserves data
     verbatim; it is not the migration's job to correct or drop stale prose.
     """
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     summary, out = migrated
     source = tracker_json(SPEC)["notes_meta"]
@@ -113,7 +113,7 @@ def test_corrected_reading_is_the_only_defaulted_plant_field(migrated):
     data, so it materialises as null on every plant and must never be
     fabricated. And because every plant here has all 18 other keys, it must be
     the ONLY defaulted field on every record."""
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     summary, out = migrated
     schema = load_schema(PLANT_TEMPLATE)
@@ -127,7 +127,7 @@ def test_corrected_reading_is_the_only_defaulted_plant_field(migrated):
 def test_photos_and_photo_counts_survive_including_the_one_photoless_plant(migrated):
     """22 of 23 plants carry photos; `photos[]` passes through opaquely and the
     empty-list plant must stay an empty list, not become null."""
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     _, out = migrated
     schema = load_schema(PLANT_TEMPLATE)
@@ -153,7 +153,7 @@ def test_selection_notes_is_populated_on_exactly_one_plant(migrated):
     HBH15 alone — so a reader that coerced nulls to `""` (or `""` to null)
     would change which fields the derived set contains and is caught here.
     """
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     _, out = migrated
     schema = load_schema(PLANT_TEMPLATE)
@@ -169,7 +169,7 @@ def test_selection_notes_is_populated_on_exactly_one_plant(migrated):
 def test_statuses_survive_across_all_three_values(migrated):
     """active/culled/keeper all appear here; a status lost or normalised would
     change downstream dashboards."""
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     _, out = migrated
     schema = load_schema(PLANT_TEMPLATE)
@@ -184,7 +184,7 @@ def test_statuses_survive_across_all_three_values(migrated):
 def test_original_notes_survive_verbatim(migrated):
     """`original_notes` is the raw Discord text and is frontmatter, not body;
     every plant here has a non-empty one."""
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     _, out = migrated
     schema = load_schema(PLANT_TEMPLATE)
@@ -203,7 +203,7 @@ def test_auto_create_is_registry_true_and_not_the_template_default(migrated):
     This project's value is `true`, so equality with the registry here is real
     evidence the registry was read.
     """
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = migrated
     project_schema = load_schema(PROJECT_TEMPLATE)
@@ -222,7 +222,7 @@ def test_auto_create_is_registry_true_and_not_the_template_default(migrated):
 def test_the_hbh_id_routing_regex_is_exact(migrated):
     """A mangled backslash silently breaks ID routing for every future Discord
     note in this project."""
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = migrated
     got = read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
@@ -235,7 +235,7 @@ def test_the_stale_migration_note_is_preserved_not_corrected(migrated):
     plants exist. It is stale in the SOURCE. Correcting or dropping prose
     during a migration is data loss and would hide the drift from the human
     who needs to see it."""
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = migrated
     got = read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))

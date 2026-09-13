@@ -40,16 +40,15 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-import project_markdown  # noqa: E402
-import tracker_migration  # noqa: E402
+from breeding_tracker import project_markdown  # noqa: E402
+from breeding_tracker import tracker_migration  # noqa: E402
 
 #: Same key ``markdown_backend`` pops off the project record on load.
 ORDER_KEY = "plant_order"
 
 DEFAULT_REGISTRY = Path.home() / ".hermes" / "breeding" / "_shared" / "breeding-meta" / "registry.json"
-DEFAULT_TEMPLATE = _REPO_ROOT / "templates" / "project-template.md"
+DEFAULT_TEMPLATE = _REPO_ROOT / "breeding_tracker" / "templates" / "project-template.md"
 
 
 def build_record(tracker_path: Path, registry_path: Path, slug: str, template_path: Path) -> dict:

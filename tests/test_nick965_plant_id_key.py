@@ -54,8 +54,8 @@ BREEDING_ROOT = MONITOR_CORE_DIR.parents[1]
 if str(MONITOR_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_CORE_DIR))
 
-import breeding_core as core  # noqa: E402
-import markdown_backend  # noqa: E402
+from breeding_tracker import breeding_core as core  # noqa: E402
+from breeding_tracker import markdown_backend  # noqa: E402
 
 LIVE_PROJECTS = sorted(p.parent.name for p in BREEDING_ROOT.glob("*/project.md"))
 

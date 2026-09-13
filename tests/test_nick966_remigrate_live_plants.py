@@ -27,16 +27,15 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO_ROOT / "src"))
 sys.path.insert(0, str(_REPO_ROOT / "tools"))
 
-import plant_markdown  # noqa: E402
+from breeding_tracker import plant_markdown  # noqa: E402
 import remigrate_live_plants as remig  # noqa: E402
-import tracker_migration  # noqa: E402
+from breeding_tracker import tracker_migration  # noqa: E402
 
 LIVE_ROOT = Path.home() / ".hermes" / "breeding"
 REGISTRY = LIVE_ROOT / "_shared" / "breeding-meta" / "registry.json"
-PLANT_TEMPLATE = _REPO_ROOT / "templates" / "plant-template.md"
+PLANT_TEMPLATE = _REPO_ROOT / "breeding_tracker" / "templates" / "plant-template.md"
 
 ALL_SLUGS = [
     "lantz",

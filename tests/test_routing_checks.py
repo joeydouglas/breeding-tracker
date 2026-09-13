@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from migration_harness import (
+from breeding_tracker.migration_harness import (
     ROUTING_FLAGS,
     ROUTING_OPTIONAL_SEPARATORS,
     ROUTING_SEPARATORS,
@@ -235,14 +235,9 @@ def test_the_production_registry_validator_really_rejects_duplicate_prefixes():
     If `breeding_core` ever stops rejecting a duplicated prefix, this failure
     stops being a live break and this check would be inventing a rule.
     """
-    core = (
-        Path.home()
-        / ".hermes"
-        / "breeding"
-        / "_shared"
-        / "monitor-core"
-        / "breeding_core.py"
-    )
+    from breeding_tracker import breeding_core as _bc
+
+    core = Path(_bc.__file__)
     if not core.exists():
         pytest.skip("production breeding_core.py not present on this machine")
     source = core.read_text(encoding="utf-8")
@@ -275,14 +270,9 @@ def test_the_production_prefix_compiler_really_uses_those_flags():
     exists. Read statically rather than imported: importing the monitor pulls
     in its Discord/Drive machinery, which the migration suite must never do.
     """
-    core = (
-        Path.home()
-        / ".hermes"
-        / "breeding"
-        / "_shared"
-        / "monitor-core"
-        / "breeding_core.py"
-    )
+    from breeding_tracker import breeding_core as _bc
+
+    core = Path(_bc.__file__)
     if not core.exists():
         pytest.skip("production breeding_core.py not present on this machine")
     source = core.read_text(encoding="utf-8")

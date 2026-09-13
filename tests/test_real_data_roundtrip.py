@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from plant_markdown import load_schema, read_plant, write_plant
-from tracker_migration import CANONICAL_PLANT_ID_KEY, SOURCE_PLANT_ID_KEY
+from breeding_tracker.plant_markdown import load_schema, read_plant, write_plant
+from breeding_tracker.tracker_migration import CANONICAL_PLANT_ID_KEY, SOURCE_PLANT_ID_KEY
 
-TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "plant-template.md"
+TEMPLATE = Path(__file__).resolve().parents[1] / "breeding_tracker" / "templates" / "plant-template.md"
 TRACKERS = sorted(glob.glob("/home/joey/.hermes/breeding/*/tracker.json"))
 
 

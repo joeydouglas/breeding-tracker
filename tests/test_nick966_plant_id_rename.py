@@ -28,8 +28,8 @@ from pathlib import Path
 
 import pytest
 
-from plant_markdown import load_schema, read_plant
-from tracker_migration import (
+from breeding_tracker.plant_markdown import load_schema, read_plant
+from breeding_tracker.tracker_migration import (
     CANONICAL_PLANT_ID_KEY,
     SOURCE_PLANT_ID_KEY,
     build_plant_record,
@@ -38,8 +38,8 @@ from tracker_migration import (
 )
 
 REPO = Path(__file__).resolve().parents[1]
-PLANT_TEMPLATE = REPO / "templates" / "plant-template.md"
-PROJECT_TEMPLATE = REPO / "templates" / "project-template.md"
+PLANT_TEMPLATE = REPO / "breeding_tracker" / "templates" / "plant-template.md"
+PROJECT_TEMPLATE = REPO / "breeding_tracker" / "templates" / "project-template.md"
 
 SLUG = "nick966-fixture"
 

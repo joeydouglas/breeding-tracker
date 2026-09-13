@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-import tracker_migration as tm
-from tracker_migration import (
+from breeding_tracker import tracker_migration as tm
+from breeding_tracker.tracker_migration import (
     MigrationSummary,
     SandboxViolationError,
     TrackerMigrationError,
@@ -26,8 +26,8 @@ from tracker_migration import (
 )
 
 REPO = Path(__file__).resolve().parents[1]
-PROJECT_TEMPLATE = REPO / "templates" / "project-template.md"
-PLANT_TEMPLATE = REPO / "templates" / "plant-template.md"
+PROJECT_TEMPLATE = REPO / "breeding_tracker" / "templates" / "project-template.md"
+PLANT_TEMPLATE = REPO / "breeding_tracker" / "templates" / "plant-template.md"
 SLUG = "test-cross"
 
 
@@ -140,7 +140,7 @@ def test_plants_key_is_not_written_into_project_frontmatter(inputs, tmp_path):
     out = tmp_path / "sandbox" / "test-cross"
     _run(tracker_path, registry_path, out)
 
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     got = read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
     assert "plants" not in got
@@ -157,7 +157,7 @@ def test_auto_create_and_prefixes_come_from_the_registry_not_the_template(
     out = tmp_path / "sandbox" / "test-cross"
     _run(tracker_path, registry_path, out)
 
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     got = read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
     assert got["auto_create"] is True  # template default is False
@@ -178,7 +178,7 @@ def test_registry_overrides_a_conflicting_tracker_value(tmp_path):
 
     _run(tracker_path, registry_path, out)
 
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     got = read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
     assert got["auto_create"] is True
@@ -216,7 +216,9 @@ def test_plant_id_prefixes_are_deep_copied_from_the_registry(tmp_path):
     """Mutating the migrated record must never corrupt the registry dict."""
     registry = _registry()
     entry = registry["projects"][0]
-    schema = __import__("project_markdown").load_schema(PROJECT_TEMPLATE)
+    schema = __import__(
+        "breeding_tracker.project_markdown", fromlist=["load_schema"]
+    ).load_schema(PROJECT_TEMPLATE)
     record, _ = build_project_record(_tracker(), entry, schema)
     record["plant_id_prefixes"][0]["prefix"] = "MUTATED"
     assert entry["plant_id_prefixes"][0]["prefix"] == "TT"
@@ -242,7 +244,7 @@ def test_plant_missing_fields_get_template_defaults_and_are_reported(tmp_path):
         "photo_count",
         "photos_drive_url",
     }
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     got = read_plant(out / "plants" / "TT01.md", schema=load_schema(PLANT_TEMPLATE))
     assert got["photo_count"] == 0
@@ -285,7 +287,7 @@ def test_defaulted_mutable_defaults_do_not_alias_across_plants(tmp_path):
     out = tmp_path / "sandbox"
     _run(tracker_path, registry_path, out)
 
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     schema = load_schema(PLANT_TEMPLATE)
     one = read_plant(out / "plants" / "TT01.md", schema=schema)
@@ -549,7 +551,7 @@ def test_migration_does_not_modify_the_source_tracker(inputs, tmp_path):
 
 def test_module_imports_no_side_effect_capable_library():
     """Static proof: nothing in this module can push, POST or message anyone."""
-    source = (REPO / "src" / "tracker_migration.py").read_text(encoding="utf-8")
+    source = (REPO / "breeding_tracker" / "tracker_migration.py").read_text(encoding="utf-8")
     forbidden = (
         "import subprocess",
         "import socket",
@@ -739,7 +741,7 @@ def _multi_plant_tracker():
 
 
 def test_a_failed_plant_write_leaves_no_half_written_tree(tmp_path, monkeypatch):
-    import plant_markdown
+    from breeding_tracker import plant_markdown
 
     tracker_path, registry_path = _write_inputs(tmp_path, _multi_plant_tracker())
     out = tmp_path / "sandbox"
@@ -765,7 +767,7 @@ def test_a_failed_plant_write_leaves_no_half_written_tree(tmp_path, monkeypatch)
 
 
 def test_a_failed_project_write_leaves_no_half_written_tree(tmp_path, monkeypatch):
-    import project_markdown
+    from breeding_tracker import project_markdown
 
     tracker_path, registry_path = _write_inputs(tmp_path, _multi_plant_tracker())
     out = tmp_path / "sandbox"
@@ -785,7 +787,7 @@ def test_rollback_keeps_a_preexisting_empty_destination_directory(
     tmp_path, monkeypatch
 ):
     """Roll back only what this run created; don't delete the caller's dir."""
-    import plant_markdown
+    from breeding_tracker import plant_markdown
 
     tracker_path, registry_path = _write_inputs(tmp_path, _multi_plant_tracker())
     out = tmp_path / "sandbox"
@@ -805,7 +807,7 @@ def test_rollback_keeps_a_preexisting_empty_destination_directory(
 
 def test_rollback_does_not_mask_the_original_failure(tmp_path, monkeypatch):
     """A rollback that itself fails must not replace the real exception."""
-    import plant_markdown
+    from breeding_tracker import plant_markdown
 
     tracker_path, registry_path = _write_inputs(tmp_path, _multi_plant_tracker())
     out = tmp_path / "sandbox"

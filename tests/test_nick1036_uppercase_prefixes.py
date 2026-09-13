@@ -15,10 +15,7 @@ import re
 import sys
 from pathlib import Path
 
-MONITOR_CORE = Path.home() / ".hermes" / "breeding" / "_shared" / "monitor-core"
-if str(MONITOR_CORE) not in sys.path:
-    sys.path.insert(0, str(MONITOR_CORE))
-import breeding_core as core  # noqa: E402
+from breeding_tracker import breeding_core as core
 
 
 def _load_wrapper_config(slug):
@@ -64,30 +61,15 @@ def test_lantz_extraction_produces_uppercase_id():
 
 
 def test_gateway_registry_uses_uppercase_prefixes():
-    ingest_path = (
-        Path.home()
-        / ".hermes"
-        / "breeding"
-        / "_shared"
-        / "breeding-ingest"
-        / "breeding_tracker"
-        / "discord_ingest.py"
-    )
-    sys.path.insert(0, str(ingest_path.parent.parent))
-    try:
-        mod = importlib.import_module("breeding_tracker.discord_ingest")
-        importlib.reload(mod)
-        prefixes = [p for p, _ in mod.PLANT_ID_REGISTRY]
-        assert "SP" in prefixes, prefixes
-        assert "LTZ" in prefixes, prefixes
-        assert "sp" not in prefixes, prefixes
-        assert "Ltz" not in prefixes, prefixes
-        ids = mod.extract_plant_ids("sp05 vigor 8 and ltz03 recovering")
-        assert set(ids) == {"SP05", "LTZ03"}, ids
-    finally:
-        sys.path.remove(str(ingest_path.parent.parent))
-        sys.modules.pop("breeding_tracker.discord_ingest", None)
-        sys.modules.pop("breeding_tracker", None)
+    from breeding_tracker import discord_ingest as mod
+
+    prefixes = [p for p, _ in mod.PLANT_ID_REGISTRY]
+    assert "SP" in prefixes, prefixes
+    assert "LTZ" in prefixes, prefixes
+    assert "sp" not in prefixes, prefixes
+    assert "Ltz" not in prefixes, prefixes
+    ids = mod.extract_plant_ids("sp05 vigor 8 and ltz03 recovering")
+    assert set(ids) == {"SP05", "LTZ03"}, ids
 
 
 def test_registry_json_prefixes_are_uppercase():
@@ -150,12 +132,10 @@ def test_template_docstring_mentions_uppercase_examples_only():
     """The plant-template.md docstring example IDs (Ltz01, PK03) should not
     show a lowercase-prefix example after this fix -- template text is
     documentation Joey specifically asked to update."""
+    import breeding_tracker
+
     template_path = (
-        Path.home()
-        / ".hermes"
-        / "breeding"
-        / "_shared"
-        / "breeding-markdown"
+        Path(breeding_tracker.__file__).resolve().parent
         / "templates"
         / "plant-template.md"
     )

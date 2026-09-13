@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-import breeding_core as core
+from breeding_tracker import breeding_core as core
 
 
 # ------------------------------------------------------------- helpers ----

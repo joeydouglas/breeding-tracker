@@ -33,7 +33,7 @@ from helpers_migration import (  # noqa: F401  (fixture re-export)
     registry_entry,
     tracker_json,
 )
-from migration_specs import MULE_FUEL as SPEC
+from breeding_tracker.migration_specs import MULE_FUEL as SPEC
 
 requires_real_data = pytest.mark.skipif(
     not SPEC.tracker.exists(),
@@ -50,7 +50,7 @@ def migrated(tmp_path, no_side_effects):
 
 def test_drive_folders_reports_subkeys_unique_to_this_project_survive(migrated):
     """Task 3.0 §4: `reports`/`reports_url` exist only on mule-fuel."""
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     _, out = migrated
     got = read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
@@ -62,7 +62,7 @@ def test_drive_folders_reports_subkeys_unique_to_this_project_survive(migrated):
 def test_mg07_photo_extra_subkeys_and_missing_fields_are_handled(migrated):
     """Task 3.0 §7a/§9.3: MG07 carries `uploaded`/`context` and lacks
     `photo_count`/`photos_drive_url`."""
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     summary, out = migrated
     source = next(p for p in tracker_json(SPEC)["plants"] if p["id"] == "MG07")
@@ -128,7 +128,7 @@ def test_auto_create_matches_the_template_default_so_this_project_cannot_prove_i
     discriminating case — at which point the honey-badger-specific proof is no
     longer the only one.
     """
-    from project_markdown import load_schema
+    from breeding_tracker.project_markdown import load_schema
 
     entry = registry_entry(SPEC)
     schema = load_schema(PROJECT_TEMPLATE)

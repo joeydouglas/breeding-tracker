@@ -64,7 +64,6 @@ import pytest
 
 MONITOR_CORE_DIR = Path(__file__).resolve().parents[1]
 BREEDING_ROOT = MONITOR_CORE_DIR.parents[1]
-BREEDING_INGEST_DIR = BREEDING_ROOT / "_shared" / "breeding-ingest"
 BREEDING_META_DIR = BREEDING_ROOT / "_shared" / "breeding-meta"
 
 if str(MONITOR_CORE_DIR) not in sys.path:
@@ -120,7 +119,6 @@ def _load_wrapper_module(project):
 
 def _gateway_pattern_for(prefix):
     """The real, live gateway pattern for ``prefix`` -- the widening target."""
-    sys.path.insert(0, str(BREEDING_INGEST_DIR))
     from breeding_tracker.discord_ingest import PLANT_ID_REGISTRY
 
     for p, compiled in PLANT_ID_REGISTRY:
@@ -203,7 +201,6 @@ def test_registry_json_now_matches_the_unified_gateway_pattern_for_all_six():
     registry = _json.loads(
         (BREEDING_META_DIR / "registry.json").read_text(encoding="utf-8")
     )
-    sys.path.insert(0, str(BREEDING_INGEST_DIR))
     from breeding_tracker.discord_ingest import PLANT_ID_REGISTRY
 
     gateway_by_prefix = {p: compiled.pattern for p, compiled in PLANT_ID_REGISTRY}

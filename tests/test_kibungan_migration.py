@@ -42,8 +42,8 @@ from helpers_migration import (  # noqa: F401  (fixture re-export)
     registry_entry,
     tracker_json,
 )
-from migration_specs import KIBUNGAN as SPEC
-from tracker_migration import verify_migration
+from breeding_tracker.migration_specs import KIBUNGAN as SPEC
+from breeding_tracker.tracker_migration import verify_migration
 
 requires_real_data = pytest.mark.skipif(
     not SPEC.tracker.exists(),
@@ -77,7 +77,7 @@ def migrated(tmp_path, no_side_effects):
 
 
 def _project(out):
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     return read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
 
@@ -128,7 +128,7 @@ def test_the_migrated_patterns_still_route_realistic_discord_text(migrated):
     Compiled with `ROUTING_FLAGS` — production's `re.IGNORECASE` — so this
     module tests the same matcher as the contract and as the monitor.
     """
-    from migration_harness import ROUTING_FLAGS
+    from breeding_tracker.migration_harness import ROUTING_FLAGS
 
     _, out = migrated
     patterns = {
@@ -201,7 +201,7 @@ def test_every_plant_carries_all_eighteen_keys():
 
 
 def test_corrected_reading_is_the_only_defaulted_plant_field(migrated):
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     summary, out = migrated
     schema = load_schema(PLANT_TEMPLATE)
@@ -253,7 +253,7 @@ def test_statuses_and_review_flagged_selection_notes_survive(migrated):
     """Three of thirteen plants carry a human 'review and confirm' note whose
     status is deliberately NOT what the note suggests — the prose and the
     status must both survive, or a pending decision is silently resolved."""
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     _, out = migrated
     schema = load_schema(PLANT_TEMPLATE)
@@ -275,7 +275,7 @@ def test_every_plant_shares_the_one_photos_drive_folder(migrated):
     """Unlike the earlier projects, all 13 plants point at the SAME project-level
     photos folder with one photo each; a migration that de-duplicated repeated
     values or hoisted them to the project record would be caught."""
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     _, out = migrated
     schema = load_schema(PLANT_TEMPLATE)

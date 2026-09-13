@@ -14,8 +14,8 @@ import copy
 from pathlib import Path
 from typing import Any, Mapping
 
-import plant_markdown
-import project_markdown
+from . import plant_markdown
+from . import project_markdown
 
 __all__ = ["scaffold_new_plant", "scaffold_new_project"]
 

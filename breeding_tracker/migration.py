@@ -26,8 +26,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-import plant_markdown
-import project_markdown
+from . import plant_markdown
+from . import project_markdown
 
 __all__ = [
     "MigrationResult",

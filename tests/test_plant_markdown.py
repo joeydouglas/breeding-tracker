@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-import plant_markdown
-from plant_markdown import (
+from breeding_tracker import plant_markdown
+from breeding_tracker.plant_markdown import (
     DuplicateKeyError,
     MalformedFrontmatterError,
     PlantMarkdownError,
@@ -30,7 +30,7 @@ from plant_markdown import (
     write_plant,
 )
 
-TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "plant-template.md"
+TEMPLATE = Path(__file__).resolve().parents[1] / "breeding_tracker" / "templates" / "plant-template.md"
 
 
 @pytest.fixture()

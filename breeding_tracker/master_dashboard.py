@@ -19,7 +19,10 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-MASTER_DIR = Path(os.environ.get("MASTER_DASHBOARD_DIR") or Path(__file__).resolve().parent)
+MASTER_DIR = Path(
+    os.environ.get("MASTER_DASHBOARD_DIR")
+    or (Path.home() / ".hermes" / "breeding" / "_shared" / "master-dashboard")
+)
 MANIFEST_FILE = MASTER_DIR / "manifest.json"
 BREEDING_ROOT = Path(os.environ.get("BREEDING_ROOT") or (Path.home() / ".hermes" / "breeding"))
 OUTPUT_DIR = MASTER_DIR / "dashboard"

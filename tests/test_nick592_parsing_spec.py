@@ -73,7 +73,7 @@ BASELINE_SNAPSHOT_PATH = (
 if str(MONITOR_CORE_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_CORE_DIR))
 
-import breeding_core  # noqa: E402
+from breeding_tracker import breeding_core  # noqa: E402
 
 SPEC = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 CASES = SPEC["cases"]
@@ -107,7 +107,7 @@ def _json_era_module():
     source = BASELINE_SNAPSHOT_PATH.read_text(encoding="utf-8")
 
     module = types.ModuleType("_json_era_breeding_core")
-    module.__file__ = str(MONITOR_CORE_DIR / "breeding_core.py")
+    module.__file__ = str(MONITOR_CORE_DIR / "breeding_tracker" / "breeding_core.py")
     exec(
         compile(source, f"<json-era breeding_core.py @{BASELINE_COMMIT}>", "exec"),
         module.__dict__,

@@ -51,7 +51,7 @@ from helpers_migration import (  # noqa: F401  (fixture re-export)
     registry_entry,
     tracker_json,
 )
-from migration_specs import SPACED_PASTE as SPEC
+from breeding_tracker.migration_specs import SPACED_PASTE as SPEC
 
 requires_real_data = pytest.mark.skipif(
     not SPEC.tracker.exists(),
@@ -90,7 +90,7 @@ def migrated(tmp_path, no_side_effects):
 
 
 def _plant(out, plant_id):
-    from plant_markdown import load_schema, read_plant
+    from breeding_tracker.plant_markdown import load_schema, read_plant
 
     return read_plant(
         out / "plants" / f"{plant_id}.md", schema=load_schema(PLANT_TEMPLATE)
@@ -98,7 +98,7 @@ def _plant(out, plant_id):
 
 
 def _project(out):
-    from project_markdown import load_schema, read_project
+    from breeding_tracker.project_markdown import load_schema, read_project
 
     return read_project(out / "project.md", schema=load_schema(PROJECT_TEMPLATE))
 
@@ -172,7 +172,7 @@ def test_the_two_char_prefix_does_not_fire_inside_ordinary_prose(migrated):
     and its parity assertion against `breeding_core` would move while this
     module silently kept testing the old matcher.
     """
-    from migration_harness import ROUTING_FLAGS
+    from breeding_tracker.migration_harness import ROUTING_FLAGS
 
     _, out = migrated
     entry = _project(out)["plant_id_prefixes"][0]
@@ -196,7 +196,7 @@ def test_routing_is_case_insensitive_in_both_directions(migrated):
     `ROUTING_FLAGS` so this module and the shared contract cannot drift onto
     different matchers.
     """
-    from migration_harness import ROUTING_FLAGS
+    from breeding_tracker.migration_harness import ROUTING_FLAGS
 
     _, out = migrated
     compiled = re.compile(

@@ -12,15 +12,15 @@ from pathlib import Path
 
 import pytest
 
-import plant_markdown
-import project_markdown
-from scaffolding import scaffold_new_plant, scaffold_new_project
+from breeding_tracker import plant_markdown
+from breeding_tracker import project_markdown
+from breeding_tracker.scaffolding import scaffold_new_plant, scaffold_new_project
 
 PLANT_TEMPLATE = (
-    Path(__file__).resolve().parents[1] / "templates" / "plant-template.md"
+    Path(__file__).resolve().parents[1] / "breeding_tracker" / "templates" / "plant-template.md"
 )
 PROJECT_TEMPLATE = (
-    Path(__file__).resolve().parents[1] / "templates" / "project-template.md"
+    Path(__file__).resolve().parents[1] / "breeding_tracker" / "templates" / "project-template.md"
 )
 
 
