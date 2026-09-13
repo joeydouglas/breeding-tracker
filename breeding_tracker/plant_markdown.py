@@ -48,6 +48,19 @@ __all__ = [
 DELIMITER = "---"
 BODY_FIELD = "observation_log"
 
+#: The plant ID key on each side of the legacy-JSON / markdown boundary
+#: (NICK-966; moved here from the retired ``tracker_migration`` module).
+#:
+#: The pre-Phase-2 ``tracker.json`` format spells a plant's identifier
+#: ``id`` — that is the legacy JSON format's own native key. The markdown
+#: corpus spells it ``plant_id`` (Joey's decision, recorded on NICK-701
+#: 2026-09-07; the runtime read/write path was aligned to it by NICK-965's
+#: ``plant_record`` module). Anything translating between the two formats
+#: renames the field rather than copying it through; declaring both
+#: constants together keeps the two spellings from drifting apart.
+SOURCE_PLANT_ID_KEY = "id"
+CANONICAL_PLANT_ID_KEY = "plant_id"
+
 MAX_FILE_BYTES = 1 * 1024 * 1024
 MAX_NESTING_DEPTH = 20
 _SCHEMA_KEYS = frozenset({"type", "default", "description"})

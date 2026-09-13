@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from breeding_tracker.plant_markdown import load_schema, read_plant, write_plant
-from breeding_tracker.tracker_migration import CANONICAL_PLANT_ID_KEY, SOURCE_PLANT_ID_KEY
+from breeding_tracker.plant_markdown import CANONICAL_PLANT_ID_KEY, SOURCE_PLANT_ID_KEY
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "breeding_tracker" / "templates" / "plant-template.md"
 TRACKERS = sorted(glob.glob("/home/joey/.hermes/breeding/*/tracker.json"))
@@ -31,8 +31,8 @@ def _plants(tracker_path):
     ``id`` key and the template-coverage check below would fail on data that
     is in fact fully covered.
 
-    The rename is delegated to ``tracker_migration`` rather than re-spelled
-    here so the two cannot drift.
+    The rename uses the shared key constants from ``plant_markdown`` rather
+    than re-spelled strings so the two cannot drift.
     """
     data = json.loads(Path(tracker_path).read_text(encoding="utf-8"))
     plants = data.get("plants", [])
