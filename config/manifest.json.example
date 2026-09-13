@@ -1,0 +1,67 @@
+{
+  "projects": [
+    {
+      "id": "mule-fuel-x-nana-glue",
+      "title": "Mule Fuel x Nana Glue",
+      "type": "cross",
+      "breeding_dir": "mule-fuel-x-nana-glue",
+      "icon": "\ud83c\udf31"
+    },
+    {
+      "id": "lantz",
+      "title": "Lantz",
+      "type": "cross",
+      "breeding_dir": "lantz",
+      "icon": "\ud83c\udf3f"
+    },
+    {
+      "id": "spaced-paste",
+      "title": "Spaced Paste",
+      "type": "cross",
+      "breeding_dir": "spaced-paste",
+      "icon": "\ud83c\udf3f"
+    },
+    {
+      "id": "paloma-coma",
+      "title": "Paloma Coma",
+      "type": "cross",
+      "breeding_dir": "paloma-coma",
+      "icon": "\ud83c\udf3f"
+    },
+    {
+      "id": "honey-badger-haze-pheno-hunt",
+      "title": "Honey Badger Haze",
+      "type": "pheno_hunt",
+      "breeding_dir": "honey-badger-haze-pheno-hunt",
+      "icon": "\ud83e\udd8a"
+    },
+    {
+      "id": "kibungan-pheno-hunt",
+      "title": "Kibungan",
+      "type": "landrace_pheno_hunt",
+      "breeding_dir": "kibungan-pheno-hunt",
+      "icon": "\ud83c\udf3f"
+    },
+    {
+      "id": "marshmallow-og-pheno-hunt",
+      "title": "Marshmallow OG",
+      "type": "pheno_hunt",
+      "breeding_dir": "marshmallow-og-pheno-hunt",
+      "icon": "\ud83c\udf3f"
+    },
+    {
+      "id": "pink-perfume-pheno-hunt",
+      "title": "Pink Perfume",
+      "type": "pheno_hunt",
+      "breeding_dir": "pink-perfume-pheno-hunt",
+      "icon": "\ud83c\udf3f"
+    },
+    {
+      "id": "ms-universe-pheno-hunt",
+      "title": "Ms Universe",
+      "type": "pheno_hunt",
+      "breeding_dir": "ms-universe-pheno-hunt",
+      "icon": "\ud83c\udf3f"
+    }
+  ]
+}
