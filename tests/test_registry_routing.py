@@ -223,12 +223,10 @@ _SEGMENT_RE = re.compile(r"/\s*'([^']+)'")
 # reader does not "fix" the registry to match a stale wrapper default, and so
 # that if the wrapper's default is ever repaired this test fails loudly and
 # tells them to delete this entry.
-KNOWN_WRAPPER_REGISTRY_DIR_DIVERGENCE = {
-    "honey-badger-haze-pheno-hunt": (
-        Path.home() / ".hermes" / "breeding" / "honey-badger-haze",  # wrapper default
-        Path.home() / ".hermes" / "breeding" / "honey-badger-haze-pheno-hunt",  # registry
-    ),
-}
+# (honey-badger-haze-pheno-hunt's wrapper default was repaired to match the
+# registry during the Sep 2026 breeding-tracker consolidation, so the map is
+# currently empty.)
+KNOWN_WRAPPER_REGISTRY_DIR_DIVERGENCE: dict[str, tuple[Path, Path]] = {}
 
 
 def _wrapper_default_breeding_dir(project):

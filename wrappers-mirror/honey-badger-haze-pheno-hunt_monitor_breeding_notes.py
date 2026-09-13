@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 import os
 
-BREEDING_DIR = Path(os.environ.get('BREEDING_DIR') or (Path.home() / '.hermes' / 'breeding' / 'honey-badger-haze'))
+BREEDING_DIR = Path(os.environ.get('BREEDING_DIR') or (Path.home() / '.hermes' / 'breeding' / 'honey-badger-haze-pheno-hunt'))
 # Consolidated: all shared logic now lives in the pip-installed
 # breeding-tracker package (github.com/joeydouglas/breeding-tracker).
 from breeding_tracker import breeding_core as core

@@ -68,7 +68,7 @@ WRAPPER_SHA256 = {
     "honey-badger-haze-pheno-hunt":
         # Re-baselined: wrappers now import the pip-installed breeding-tracker
         # package instead of sys.path-inserting _shared/monitor-core.
-        "e429026f276eca28203a59d6e68c774cd5509679e40b639df74a15912697b240",
+        "51f984d9cc87f656343a763834106afd7fbfe5104d458d059dfd6854ac592c3c",
     "kibungan-pheno-hunt":
         # Re-baselined: wrappers now import the pip-installed breeding-tracker
         # package instead of sys.path-inserting _shared/monitor-core.

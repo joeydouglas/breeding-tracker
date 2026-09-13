@@ -183,11 +183,14 @@ def create_gateway_hook(
         # logged but never turns into an ingestion block or a changed
         # gateway response, so it can never re-trigger an agent reply.
         processing_results: list[str] = []
+        content = payload["messages"][0].get("content") or payload["messages"][
+            0
+        ].get("transcriptionText", "")
+        # Extracted unconditionally: the acknowledgement rewrite below needs
+        # plant_ids even when no processor is wired (an UnboundLocalError
+        # here previously crashed the hook for processor-less deployments).
+        plant_ids = extract_plant_ids(content)
         if processor is not None:
-            content = payload["messages"][0].get("content") or payload["messages"][
-                0
-            ].get("transcriptionText", "")
-            plant_ids = extract_plant_ids(content)
             if not plant_ids and spoken_id_resolver is not None and content.strip():
                 # Regex found nothing literal (e.g. spoken "number seven"
                 # instead of "PC07") -- try the scoped local-LLM fallback.
@@ -231,9 +234,6 @@ def create_gateway_hook(
         # Keep/Cull/Unsure clarification. The instruction explicitly forbids
         # processing the observation again; SQLite + tracker changes above
         # remain the only write path.
-        content = payload["messages"][0].get("content") or payload["messages"][0].get(
-            "transcriptionText", ""
-        )
         ids_text = ", ".join(plant_ids) if plant_ids else "none confidently identified"
         results_text = "; ".join(processing_results) if processing_results else "no tracker update reported"
         rewritten = (
