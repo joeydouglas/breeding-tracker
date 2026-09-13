@@ -123,7 +123,7 @@ def _frontmatter(out, plant_id):
 def _body(out, plant_id):
     return (
         (out / "plants" / f"{plant_id}.md")
-        .read_text(encoding="utf-8", newline="")
+        .read_text(encoding="utf-8")
         .split("\n---\n", 1)[1]
     )
 

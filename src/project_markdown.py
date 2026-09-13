@@ -471,7 +471,15 @@ def load_schema(path: str | os.PathLike) -> dict:
     Each returned default is a fresh object, so callers mutating one
     project's default list/dict can never corrupt another's.
     """
-    text = Path(path).read_text(encoding="utf-8", newline="")
+    # NOTE: Path.read_text() has never accepted a `newline` kwarg (that
+    # parameter exists on open()/write_text(), not read_text()) -- passing
+    # one is a TypeError on every Python version, not a version-compat gap.
+    # This crashed load_schema() (and therefore load_tracker_for() and
+    # every markdown-backend update_plant() call) unconditionally in
+    # production; caught 2026-09-08 investigating a live HBH18 update that
+    # was recorded in Discord ingest's SQLite store but never wrote through
+    # to plants/HBH18.md, never committed, and never pushed to GitHub.
+    text = Path(path).read_text(encoding="utf-8")
     yaml_text, _ = _split_frontmatter(text)
     raw = _parse_yaml_plain(yaml_text)
 

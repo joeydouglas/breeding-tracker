@@ -451,7 +451,13 @@ def load_schema(path: str | os.PathLike) -> dict:
     Each returned default is a fresh object, so callers mutating one plant's
     default list can never corrupt another's.
     """
-    text = Path(path).read_text(encoding="utf-8", newline="")
+    # NOTE: Path.read_text() has never accepted a `newline` kwarg (that
+    # parameter exists on open()/write_text(), not read_text()) -- passing
+    # one is a TypeError on every Python version. Same bug/fix as
+    # project_markdown.py's load_schema(); see that file's comment for the
+    # production incident this caused (2026-09-08, HBH18 update silently
+    # never persisted to the markdown data repo).
+    text = Path(path).read_text(encoding="utf-8")
     yaml_text, _ = _split_frontmatter(text)
     raw = _parse_yaml_plain(yaml_text)
 
