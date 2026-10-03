@@ -204,6 +204,20 @@ def save_tracker(tracker, tracker_file):
     STORAGE_BACKENDS[DEFAULT_BACKEND].save_tracker(tracker, tracker_file)
 
 
+_NEGATED_KEEP_RE = re.compile(
+    r"\b(?:don'?t|dont|do not|doesn'?t|won'?t|wont|will not|not|never|no longer|"
+    r"shouldn'?t|wouldn'?t|can'?t|cannot|gonna not)"
+    r"(?:\s+\w+){0,2}?\s+(?:keeper|keep|select)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_negated_keep(text):
+    """Remove negated keep phrases ("don't wanna keep", "won't keep it") so
+    they aren't read as a keeper signal. Positive phrasing is untouched."""
+    return _NEGATED_KEEP_RE.sub(' ', text)
+
+
 def parse_observation(text):
     """Extract structured data from natural language observation.
 
@@ -241,7 +255,7 @@ def parse_observation(text):
         observation['status'] = 'top_keeper'
     elif re.search(r'\b(cull|culled|toss|trash)\b', text, re.IGNORECASE):
         observation['status'] = 'culled'
-    elif re.search(r'\b(keeper|keep|select)\b', text, re.IGNORECASE):
+    elif re.search(r'\b(keeper|keep|select)\b', _strip_negated_keep(text), re.IGNORECASE):
         observation['status'] = 'keeper'
 
     return observation
