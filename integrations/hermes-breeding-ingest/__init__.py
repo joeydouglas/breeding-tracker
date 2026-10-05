@@ -387,7 +387,7 @@ def _mentions_known_cross(text: str, known: dict[str, tuple[str, list[str]]]) ->
     (``CROSS_ALIASES``, NOT the full ``tracker.json`` cross_name -- see that
     dict's docstring for why) appears in ``text`` as a case-insensitive,
     word-bounded substring. This exists to run BEFORE any LLM call: the
-    resolver below only ever invokes Ollama when this returns exactly one
+    resolver below only ever invokes the LLM when this returns exactly one
     prefix. Zero or 2+ matches must short-circuit to "no ID" without
     touching the model at all -- that is the actual NICK-979 fix, not a
     prompt tweak. A model asked to disambiguate is still a model that can
@@ -409,12 +409,34 @@ def _mentions_known_cross(text: str, known: dict[str, tuple[str, list[str]]]) ->
     return matches
 
 
+def _call_default_llm(prompt: str) -> str:
+    """Single zero-temperature call to Hermes' default (main) LLM; returns the
+    raw text. Isolated so tests can stub it. Raises on any failure (caller
+    treats failures as a safe no-op)."""
+    from agent.auxiliary_client import call_llm, extract_content_or_reasoning
+
+    response = call_llm(
+        task="breeding_spoken_id",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        max_tokens=120,
+        timeout=60,
+    )
+    text = (extract_content_or_reasoning(response) or "").strip()
+    # Tolerate a ```json fenced reply.
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    return text
+
+
 def _make_spoken_id_resolver():
-    """Build the scoped local-LLM fallback (NICK-305) used ONLY when the
+    """Build the scoped LLM fallback (NICK-305) used ONLY when the
     deterministic regex finds zero literal plant IDs in a breeding-channel
-    message. Calls the local Qwen3.8-27B IQ4 model via Ollama, using the
-    two-GPU local service. It makes no network egress or metered API call and
-    fires only on the rare zero-literal-ID path.
+    message. Calls Hermes' configured default LLM through the auxiliary
+    client (``_call_default_llm``); the former local Ollama/Qwen path was
+    retired Oct 2026. It fires only on the rare zero-literal-ID path.
 
     Design note (found in local sandbox testing before this ever touched a
     real message): an EARLIER version of this prompted each cross
@@ -430,14 +452,6 @@ def _make_spoken_id_resolver():
     against that specific cross's real known-ID list before use.
     """
     import json as _json
-    import urllib.request
-
-    OLLAMA_URL = os.environ.get(
-        "BREEDING_OLLAMA_URL", "http://127.0.0.1:11434/api/generate"
-    )
-    OLLAMA_MODEL = os.environ.get(
-        "BREEDING_OLLAMA_MODEL", "qwen3.8-27b-64k"
-    )
 
     def _resolve(content: str) -> list[str]:
         known = _known_plant_ids()
@@ -485,31 +499,14 @@ def _make_spoken_id_resolver():
             "not clearly and unambiguously named or implied. No other "
             f"text.\n\nTranscript: {content!r}"
         )
-        body = _json.dumps(
-            {
-                "model": OLLAMA_MODEL,
-                "stream": False,
-                "prompt": prompt,
-                "format": "json",
-                "options": {"temperature": 0},
-            }
-        ).encode("utf-8")
-        request = urllib.request.Request(
-            OLLAMA_URL, data=body, headers={"Content-Type": "application/json"}
-        )
         try:
-            # 180s covers the measured cold Qwen3.8-27B load (~99s) plus
-            # inference time. Failures remain safe no-ops in the gateway hook;
-            # valid spoken IDs are worth waiting for on this rare path.
-            with urllib.request.urlopen(request, timeout=180) as response:
-                payload = _json.loads(response.read().decode("utf-8"))
+            raw = _call_default_llm(prompt)
         except Exception:
             logger.exception(
                 "breeding-channel-ingest: spoken-ID resolver request to "
-                "Ollama failed"
+                "the default LLM failed"
             )
             return []
-        raw = payload.get("response", "")
         try:
             parsed = _json.loads(raw)
         except Exception:

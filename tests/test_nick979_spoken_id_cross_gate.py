@@ -20,7 +20,7 @@ all resolve to PC07 with ZERO cross name or alias anywhere in the text --
 report (a bare "number N" phrase resolving to a real cross with no
 disambiguating evidence), just narrower in trigger phrasing.
 
-THE FIX. A deterministic, LLM-free pre-filter runs BEFORE any Ollama call:
+THE FIX. A deterministic, LLM-free pre-filter runs BEFORE any LLM call:
 ``_mentions_known_cross(text, known)`` does a case-insensitive word-boundary
 substring match of each cross's short spoken alias (not its full
 tracker.json cross_name, which for two projects both contain the shared
@@ -33,7 +33,7 @@ structurally: there is no code path left where the model can produce an ID
 for a transcript that never named its cross, because that transcript never
 reaches the model in the first place.
 
-Every test here is fully offline/deterministic -- no real Ollama call, no
+Every test here is fully offline/deterministic -- no real LLM call, no
 real breeding_dir/tracker.json write. ``known`` is a synthetic
 {prefix: (cross_name, [ids])} map matching _known_plant_ids()'s real return
 shape, built inline per test.
@@ -42,7 +42,6 @@ shape, built inline per test.
 from __future__ import annotations
 
 import sys
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -147,12 +146,12 @@ def test_resolver_skips_the_llm_entirely_when_no_cross_is_named(plugin_module, m
     def _fake_known():
         return {"PC": ("Paloma Coma", ["PC07"])}
 
-    def _fake_urlopen(*args, **kwargs):
+    def _fake_llm(*args, **kwargs):
         called["n"] += 1
         raise AssertionError("LLM must not be called when no cross was named")
 
     monkeypatch.setattr(plugin_module, "_known_plant_ids", _fake_known)
-    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(plugin_module, "_call_default_llm", _fake_llm)
 
     resolver = plugin_module._make_spoken_id_resolver()
     result = resolver("Totally keeping number seven.")
@@ -168,11 +167,11 @@ def test_resolver_skips_the_llm_when_two_crosses_named_ambiguously(plugin_module
             "MG": ("Mule Fuel x Nana Glue", ["MG07"]),
         }
 
-    def _fake_urlopen(*args, **kwargs):
+    def _fake_llm(*args, **kwargs):
         raise AssertionError("LLM must not be called on ambiguous multi-cross input")
 
     monkeypatch.setattr(plugin_module, "_known_plant_ids", _fake_known)
-    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(plugin_module, "_call_default_llm", _fake_llm)
 
     resolver = plugin_module._make_spoken_id_resolver()
     result = resolver("Paloma Coma number seven and Mule Fuel number seven")
@@ -188,26 +187,14 @@ def test_resolver_still_calls_the_llm_when_exactly_one_cross_is_named(plugin_mod
     def _fake_known():
         return {"PC": ("Paloma Coma", ["PC07"])}
 
-    class _FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def read(self):
-            import json
-
-            return json.dumps(
-                {"response": json.dumps({"cross_prefix": "PC", "plant_id": "PC07"})}
-            ).encode("utf-8")
-
-    def _fake_urlopen(*args, **kwargs):
+    def _fake_llm(*args, **kwargs):
         called["n"] += 1
-        return _FakeResponse()
+        import json
+
+        return json.dumps({"cross_prefix": "PC", "plant_id": "PC07"})
 
     monkeypatch.setattr(plugin_module, "_known_plant_ids", _fake_known)
-    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(plugin_module, "_call_default_llm", _fake_llm)
 
     resolver = plugin_module._make_spoken_id_resolver()
     result = resolver("Hello, Paloma Coma. Number seven is fucking good.")
@@ -228,26 +215,13 @@ def test_resolver_rejects_llm_answer_that_disagrees_with_the_deterministic_gate(
             "MG": ("Mule Fuel x Nana Glue", ["MG07"]),
         }
 
-    class _FakeResponse:
-        def __enter__(self):
-            return self
+    def _fake_llm(*args, **kwargs):
+        import json
 
-        def __exit__(self, *a):
-            return False
-
-        def read(self):
-            import json
-
-            # Named cross is Paloma Coma, but the model answers Mule Fuel.
-            return json.dumps(
-                {"response": json.dumps({"cross_prefix": "MG", "plant_id": "MG07"})}
-            ).encode("utf-8")
-
-    def _fake_urlopen(*args, **kwargs):
-        return _FakeResponse()
+        return json.dumps({"cross_prefix": "MG", "plant_id": "MG07"})
 
     monkeypatch.setattr(plugin_module, "_known_plant_ids", _fake_known)
-    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(plugin_module, "_call_default_llm", _fake_llm)
 
     resolver = plugin_module._make_spoken_id_resolver()
     result = resolver("Hello, Paloma Coma. Number seven is fucking good.")
